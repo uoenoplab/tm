@@ -4,20 +4,21 @@
 import argparse
 import sys
 
-namehelp = 'Hostname (e.g., 04)'
+namehelp = 'Hostname (e.g., n04)'
 
 class Tm(object):
     def __init__(self):
         parser = argparse.ArgumentParser(
                 description="tm - testbed management tool",
                 usage='tm [-h] COMMAND <args>')
-        parser.add_argument('command', metavar='COMMAND', help='{inventory|power|console}')
+        parser.add_argument('command', metavar='COMMAND',
+                help='{inventory|power|console}')
         args = parser.parse_args(sys.argv[1:2])
-        if not hasattr(self, args.command):
+        if hasattr(self, args.command):
+            getattr(self, args.command)()
+        else:
             print('Unrecognized command', args.command)
             parser.print_help()
-        else:
-            getattr(self, args.command)()
 
     def inventory(self):
         parser = argparse.ArgumentParser(
@@ -32,24 +33,16 @@ class Tm(object):
         delete.set_defaults(func='delete')
 
         add = subparsers.add_parser('add')
-        add.add_argument('--mac', type=str, required=True,
-                help='MAC addr (e.g, 00:00:00:00:00:00)')
-        add.add_argument('--ip', type=str, required=True,
-                help='IPv4 addr (e.g., 192.168.0.2)')
-        add.add_argument('--nic', type=str, required=True,
-                help='NIC model (e.g., Intel X520-SR2)')
-        add.add_argument('--cpu', type=str, required=True,
-                help='CPU model (e.g., Intel Xeon E3-1220v3)')
-        add.add_argument('--ncpus', type=int, required=True,
-                help='# of CPU packages')
-        add.add_argument('--ram', type=int, required=True,
-                help='RAM in GB (e.g., 64)')
-        add.add_argument('--disk', type=str, required=True,
-                help='Disk model (e.g., Samsung Evo 870 256GB)')
-        add.add_argument('--gpu', type=str, required=True,
-                help='GPU model (e.g., ZOTAC GeForce GTX 1070)')
-        add.add_argument('--note', type=str,
-                help='Note (e.g., PCIe slot 1 is broken)')
+        lm = lambda o, t, r, h: add.add_argument(o, type=t, required=r, help=h)
+        lm('--mac', str, True, 'MAC addr (e.g., 00:00:00:00:00:00)')
+        lm('--ip', str, True, 'IPv4 addr (e.g., 192.168.0.2)')
+        lm('--nic', str, True, '(non-boot) NIC model (e.g., Intel X520-SR2)')
+        lm('--cpu', str, True, 'CPU model (e.g., Intel Xeon E3-1220v3)')
+        lm('--ncpus', int, True, '# of CPU packages')
+        lm('--ram', int, True, 'RAM in GB (e.g., 64)')
+        lm('--disk', str, True, 'Disk model (e.g., Samsung Evo 870 256GB)')
+        lm('--gpu', str, True, 'GPU model (e.g., ZOTAC GeForce GTX 1070)')
+        lm('--note', str, False, 'Note (e.g., PCIe slot 1 is broken)')
         add.add_argument('node', type=str, help=namehelp)
         add.set_defaults(func='add')
 
