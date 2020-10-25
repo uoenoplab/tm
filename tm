@@ -6,6 +6,11 @@ import sys
 import pyipmi
 import pyipmi.interfaces
 import socket
+import subprocess
+import shlex
+from tinydb import TinyDB, Query
+import copy
+import pandas as pd
 
 namehelp = 'Hostname (e.g., n04)'
 
@@ -34,27 +39,54 @@ class Tm(object):
         delete.add_argument('node', type=str, help=namehelp)
         delete.set_defaults(func='delete')
 
-        add = subparsers.add_parser('add')
-        lm = lambda o, t, r, h: add.add_argument(o, type=t, required=r, help=h)
-        lm('--mac', str, True, 'MAC addr (e.g., 00:00:00:00:00:00)')
-        lm('--ip', str, True, 'IPv4 addr (e.g., 192.168.0.2)')
-        lm('--ipmi', str, True, 'IPMI user,pass (e.g., ADMIN,ADMIN)')
-        lm('--cpu', str, True, 'CPU (e.g., Intel Xeon E3-1220v3)')
-        lm('--ncpus', int, True, '# of CPU packages')
-        lm('--ram', int, True, 'RAM in GB (e.g., 64)')
-        lm('--nic', str, True, '(non-boot) NIC (e.g., Intel X520-SR2)')
-        lm('--disk', str, False, 'Disk (e.g., Samsung Evo 870 256GB)')
-        lm('--accel', str, False, 'Accelerator (e.g., ZOTAC GeForce GTX 1070)')
-        lm('--note', str, False, 'Note (e.g., PCIe slot 1 is broken)')
-        add.add_argument('node', type=str, help=namehelp)
-        add.set_defaults(func='add')
+        for cmd in ('add', 'update'):
+            p = subparsers.add_parser(cmd)
+            lm = lambda o, t, r, h: p.add_argument(o, type=t, required=r, help=h)
+            lm('--mac', str, True, 'MAC addr (e.g., 00:00:00:00:00:00)')
+            lm('--ip', str, True, 'IPv4 addr (e.g., 192.168.0.2)')
+            lm('--ipmipass', str, True, 'IPMI user,pass (e.g., ADMIN,ADMIN)')
+            lm('--cpu', str, True, 'CPU (e.g., Intel Xeon E3-1220v3)')
+            lm('--ncpus', int, True, '# of CPU packages')
+            lm('--ram', int, True, 'RAM in GB (e.g., 64)')
+            lm('--nic', str, True, '(non-boot) NIC (e.g., Intel X520-SR2)')
+            lm('--disk', str, False, 'Disk (e.g., Samsung Evo 870 256GB)')
+            lm('--accel', str, False, 'Accelerator (e.g., ZOTAC GeForce GTX 1070)')
+            lm('--note', str, False, 'Note (e.g., PCIe slot 1 is broken)')
+            lm('--ipmiaddr', str, False, 'IPMI address (e.g., if not ip+100)')
+            p.add_argument('node', type=str, help=namehelp)
+            p.set_defaults(func=cmd)
 
         args = parser.parse_args(sys.argv[2:])
         if hasattr(args, 'node'):
             if args.node and None in self.addrs(args.node):
                 print('{}: invalid node'.format(args.node))
                 return
-        print(args)
+
+        #add example --mac=00:00:00:00:00:00 --ip=192.168.56.11 --ipmi=ADMIN,ADMIN --cpu=Xeon --ncpus=1 --ram=32 --nic=x520-SR2 n01
+        db = TinyDB('tmdb.json')
+        if args.func == 'add':
+            d = copy.copy(vars(args))
+            del d['func']
+            db.insert(d)
+            print(d)
+        elif args.func == 'show':
+            if args.node:
+                r = db.search(Query().node == args.node)
+            else:
+                table = db.table(db.tables().pop())
+                r = table.all()
+            df = pd.DataFrame.from_dict(r)
+            columns = list(df.columns)
+            columns.remove('node')
+            columns.insert(0, 'node')
+            print(df.reindex(columns=columns))
+
+        elif args.func == 'delete':
+            r = db.get(Query().node == args.node)
+            if r:
+                db.remove(doc_ids=[r.doc_id,])
+            else:
+                print('{} does not exist in the db'.format(args.node))
 
     def power(self):
         parser = argparse.ArgumentParser(
@@ -101,10 +133,15 @@ class Tm(object):
         parser.add_argument('node', type=str,
                 help=namehelp)
         args = parser.parse_args(sys.argv[2:])
-        if None in self.addrs(args.node):
+        addrs = self.addrs(args.node)
+        if None in addrs:
             return
 
-        print(args.node)
+        userpass = ('root', 'calvin')
+        cmd = 'ipmitool -I lanplus -H {} -U {} -P {} sol activate'.format(
+                addrs[1], userpass[0], userpass[1])
+        subprocess.call(shlex.split(cmd))
+        print('\n')
 
     def addrs(self, name):
         try:
