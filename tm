@@ -12,11 +12,22 @@ from tinydb import TinyDB, Query
 import copy
 import pandas as pd
 
+"""
+./tm inventory add --mac 20:47:47:88:cd:9c --ip=192.168.56.12 --ipmipass
+root,calvin --cpu "Xeon Haswell" --ncpus 2 --ram 32 --nic "XXV710-DA2" n02
+./tm inventory add --mac 90:e2:ba:48:46:60 --ip=192.168.56.11 --ipmipass
+ADMIN,ADMIN --cpu "Xeon Silver" --ncpus 2 --ram 64 --nic "XXV710-DA2" n01
+"""
+
+
+DBFILE = 'tmdb.json'
 namehelp = 'Hostname (e.g., n04)'
 
 class Tm(object):
     def __init__(self):
+        self.loaderpath = '/var/lib/tftpboot/pxelinux.cfg'
         self.ipmi_addr_off = 100
+        self.db = TinyDB(DBFILE)
 
         parser = argparse.ArgumentParser(
                 description="tm - testbed management tool",
@@ -31,9 +42,11 @@ class Tm(object):
         parser = argparse.ArgumentParser(
                 description="tm-inventory - node metadata management")
         subparsers = parser.add_subparsers(title='COMMAND')
-        show = subparsers.add_parser('show')
-        show.add_argument('--node', type=str, help=namehelp)
-        show.set_defaults(func='show')
+
+        for cmd in ('show', 'test'):
+            p = subparsers.add_parser(cmd)
+            p.add_argument('--node', type=str, help=namehelp)
+            p.set_defaults(func=cmd)
 
         delete = subparsers.add_parser('delete')
         delete.add_argument('node', type=str, help=namehelp)
@@ -57,34 +70,108 @@ class Tm(object):
             p.set_defaults(func=cmd)
 
         args = parser.parse_args(sys.argv[2:])
-        if hasattr(args, 'node'):
+        if args.func != 'add' and hasattr(args, 'node'):
             if args.node and None in self.addrs(args.node):
                 print('{}: invalid node'.format(args.node))
                 return
 
         #add example --mac=00:00:00:00:00:00 --ip=192.168.56.11 --ipmi=ADMIN,ADMIN --cpu=Xeon --ncpus=1 --ram=32 --nic=x520-SR2 n01
-        db = TinyDB('tmdb.json')
         if args.func == 'add':
             d = copy.copy(vars(args))
             del d['func']
-            db.insert(d)
+            self.db.insert(d)
             print(d)
-        elif args.func == 'show':
+
+        elif args.func == 'show' or args.func == 'test':
             if args.node:
-                r = db.search(Query().node == args.node)
+                res = [self.db.get(Query().node == args.node)]
             else:
-                table = db.table(db.tables().pop())
-                r = table.all()
-            df = pd.DataFrame.from_dict(r)
-            columns = list(df.columns)
-            columns.remove('node')
-            columns.insert(0, 'node')
-            print(df.reindex(columns=columns))
+                res = self.db.all()
+                if len(res) == 0:
+                    print('empty inventory')
+                    return
+
+            if args.func == 'show':
+                df = pd.DataFrame.from_dict(res)
+                columns = list(df.columns)
+                columns.remove('node')
+                columns.insert(0, 'node')
+                print(df.reindex(columns=columns))
+
+            else:
+                for node in res:
+                    # test dns
+                    try:
+                        addr = socket.gethostbyname(node['node'])
+                    except(socket.gaierror):
+                        print('{}: Cannot resolve name. Check /etc/hosts and '
+                              '/etc/dnsmasq.conf'.format(node['node']))
+                        return
+
+                    # compare with those registered to inventory
+                    msg = (node['node'] +
+                            ': Network address {} {} inventory one {}')
+                    m = 'unmatches' if addr != node['ip'] else 'matches'
+                    print(msg.format(addr, m, node['ip']))
+
+                    if self.default_ipmi_addr(addr) != node['ipmiaddr']:
+                        print('Warning: ipmiaddr {} differs from the '
+                              'default'.format(self.default_ipmi_addr(addr)))
+
+                    # test ipmi
+                    cmd = 'ping -c 2 {}'.format(node['ipmiaddr'])
+                    msg = node['node'] + ': IPMI {} {}'
+                    try:
+                        subprocess.call(shlex.split(cmd),
+                                stdout=subprocess.DEVNULL)
+                        print(msg.format(node['ipmiaddr'], 'reachable'))
+                    except(OSError) as e:
+                        print(msg.format(node['ipmiaddr'], 'unreachable'))
+
+                    # test loader
+                    cmd = 'ls {}'.format(self.loaderpath)
+                    msg = node['node'] + ': loader {} {} in ' + self.loaderpath
+                    try:
+                        res = subprocess.check_output(shlex.split(cmd))
+                    except(subprocess.CalledProcessError) as e:
+                        print('{}: {} failed {}'.format(node['node'], cmd, e))
+                        return
+                    files = []
+                    for f in res.decode().split('\n')[0:-1]:
+                        files.append(f.lstrip('01-').replace('-', ':'))
+                    print(msg.format(node['mac'],
+                        'found' if node['mac'] in files else 'not found'))
+
+                    # test /etc/dnsmasq.conf
+                    cmd = ("cat /etc/dnsmasq.conf | grep ^dhcp-host= "
+                           "| cut -d' ' -f1 | cut -d'=' -f2")
+                    try:
+                        res = subprocess.getoutput(cmd)
+                    except(subprocess.CalledProcessError):
+                        print('{}: failed in {}'.format(node['node'], cmd))
+                    for line in res.split('\n'):
+                        mac, ip, name = line.split(',')
+                        if node['node'] == name:
+                            if node['mac'] == mac and node['ip'] == ip:
+                                print('{}: MAC and IP address found in '
+                                      '/etc/dnsmasq.conf'.format(node['node']))
+                                break
+                            if node['mac'] != mac:
+                                print('{}: inventory {} registered {}'.format(
+                                    node['mac'], mac))
+                            if node['ip'] != ip:
+                                print('{}: inventory {} registered {}'.format(
+                                    node['ip'], ip))
+                            break
+                    else:
+                        print('{}: not in /etc/dnsmasq.conf'.format(
+                            node['node']))
+                        return
 
         elif args.func == 'delete':
-            r = db.get(Query().node == args.node)
+            r = self.db.get(Query().node == args.node)
             if r:
-                db.remove(doc_ids=[r.doc_id,])
+                self.db.remove(doc_ids=[r.doc_id,])
             else:
                 print('{} does not exist in the db'.format(args.node))
 
@@ -143,14 +230,18 @@ class Tm(object):
         subprocess.call(shlex.split(cmd))
         print('\n')
 
-    def addrs(self, name):
-        try:
-            addr = socket.gethostbyname(name)
-        except(socket.gaierror):
-            return (None, None)
+    def default_ipmi_addr(self, addr):
         iaddr = addr.split('.')
         iaddr[3] = str(int(iaddr[3])+self.ipmi_addr_off)
-        return (addr, '.'.join(iaddr))
+        return '.'.join(iaddr)
+
+    def addrs(self, name):
+        try:
+            r = self.db.get(Query().node == name)
+            addr = r['ip']
+        except(socket.gaierror):
+            return (None, None)
+        return (addr, self.default_ipmi_addr(addr))
 
 if __name__ == '__main__':
     Tm()
