@@ -225,6 +225,8 @@ class Tm(object):
             return
 
         userpass = ('root', 'calvin')
+        r = self.db.get(Query().node == args.node)
+        userpass = r['ipmipass'].split(',')
         cmd = 'ipmitool -I lanplus -H {} -U {} -P {} sol activate'.format(
                 addrs[1], userpass[0], userpass[1])
         subprocess.call(shlex.split(cmd))
