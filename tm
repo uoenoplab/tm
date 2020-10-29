@@ -9,8 +9,11 @@ import socket
 import subprocess
 import shlex
 from tinydb import TinyDB, Query
+from tinydb.operations import delete
 import copy
 import pandas as pd
+from datetime import datetime
+import getpass
 
 """
 ./tm inventory add --mac 20:47:47:88:cd:9c --ip=192.168.56.12 --ipmipass
@@ -22,6 +25,7 @@ ADMIN,ADMIN --cpu "Xeon Silver" --ncpus 2 --ram 64 --nic "XXV710-DA2" n01
 
 DBFILE = 'tmdb.json'
 namehelp = 'Hostname (e.g., n04)'
+dtfmt = '%d/%m/%y'
 
 class Tm(object):
     def __init__(self):
@@ -33,10 +37,49 @@ class Tm(object):
                 description="tm - testbed management tool",
                 usage='tm [-h] COMMAND <args>')
         parser.add_argument('command', metavar='COMMAND',
-                choices=['inventory', 'power', 'console'],
+                choices=['inventory', 'power', 'console', 'reservation'],
                 help='{inventory|power|console}')
         args = parser.parse_args(sys.argv[1:2])
         getattr(self, args.command)()
+
+    def reservation(self):
+        parser = argparse.ArgumentParser(
+                description="tm-reservation - node reservation")
+        subparsers = parser.add_subparsers(title='COMMAND')
+        for cmd in ('reserve', 'update', 'release'):
+            p = subparsers.add_parser(cmd)
+            p.add_argument('node', type=str, help=namehelp)
+            if cmd != 'release':
+                p.add_argument('date', type=str, help='ddmmyy')
+            p.set_defaults(func=cmd)
+        args = parser.parse_args(sys.argv[2:])
+
+        if args.func == 'reserve' or args.func == 'release':
+            r = self.db.get(Query().node == args.node)
+            if not r:
+                print('{}: invalid node'.format(args.node))
+                return
+            elif args.func == 'reserve' and 'user' in r:
+                print('{}: node in use ({})'.format(args.node, r['user']))
+                return
+            elif args.func == 'release' and 'user' not in r:
+                print('{}: node is not reserved'.format(args.node))
+                return
+            if args.func == 'reserve':
+                try:
+                    dt = datetime.strptime(args.date, dtfmt)
+                except(ValueError):
+                    print('date format must be {}, not ', args.date, dtfmt)
+                    return
+                if dt < datetime.now():
+                    print('date must be on or later than today')
+                    return
+                self.db.update({'user': getpass.getuser(),
+                    'date': dt.strftime(dtfmt)},
+                    Query().node == args.node)
+            else:
+                for e in ['user', 'date']:
+                    self.db.update(delete(e), Query().node == args.node)
 
     def inventory(self):
         parser = argparse.ArgumentParser(
@@ -52,20 +95,23 @@ class Tm(object):
         delete.add_argument('node', type=str, help=namehelp)
         delete.set_defaults(func='delete')
 
+        t = True
+        f = False
         for cmd in ('add', 'update'):
             p = subparsers.add_parser(cmd)
             lm = lambda o, t, r, h: p.add_argument(o, type=t, required=r, help=h)
-            lm('--mac', str, True, 'MAC addr (e.g., 00:00:00:00:00:00)')
-            lm('--ip', str, True, 'IPv4 addr (e.g., 192.168.0.2)')
-            lm('--ipmipass', str, True, 'IPMI user,pass (e.g., ADMIN,ADMIN)')
-            lm('--cpu', str, True, 'CPU (e.g., Intel Xeon E3-1220v3)')
-            lm('--ncpus', int, True, '# of CPU packages')
-            lm('--ram', int, True, 'RAM in GB (e.g., 64)')
-            lm('--nic', str, True, '(non-boot) NIC (e.g., Intel X520-SR2)')
-            lm('--disk', str, False, 'Disk (e.g., Samsung Evo 870 256GB)')
-            lm('--accel', str, False, 'Accelerator (e.g., ZOTAC GeForce GTX 1070)')
-            lm('--note', str, False, 'Note (e.g., PCIe slot 1 is broken)')
-            lm('--ipmiaddr', str, False, 'IPMI address (e.g., if not ip+100)')
+            lm('--mac', str, t, 'MAC addr (e.g., 00:00:00:00:00:00)')
+            lm('--ip', str, t, 'IPv4 addr (e.g., 192.168.0.2)')
+            lm('--ipmipass', str, t, 'IPMI user,pass (e.g., ADMIN,ADMIN)')
+            lm('--cpu', str, t, 'CPU (e.g., Intel Xeon E3-1220v3)')
+            lm('--ncpus', int, t, '# of CPU packages')
+            lm('--ram', int, t, 'RAM in GB (e.g., 64)')
+            lm('--nic', str, t, '(non-boot) NIC (e.g., Intel X520-SR2)')
+            lm('--disk', str, f, 'Disk (e.g., Samsung Evo 870 256GB)')
+            lm('--accel', str, f, 'Accelerator (e.g., ZOTAC GeForce GTX 1070)')
+            lm('--note', str, f, 'Note (e.g., PCIe slot 1 is broken)')
+            lm('--ipmiaddr', str, f, 'IPMI address (e.g., if not ip+100)')
+            t = False
             p.add_argument('node', type=str, help=namehelp)
             p.set_defaults(func=cmd)
 
@@ -76,10 +122,14 @@ class Tm(object):
                 return
 
         #add example --mac=00:00:00:00:00:00 --ip=192.168.56.11 --ipmi=ADMIN,ADMIN --cpu=Xeon --ncpus=1 --ram=32 --nic=x520-SR2 n01
-        if args.func == 'add':
+        if args.func == 'add' or args.func == 'update':
             d = copy.copy(vars(args))
             del d['func']
-            self.db.insert(d)
+            if args.func == 'update':
+                del d['node']
+                self.db.update(d, Query().node == args.node)
+            else:
+                self.db.insert(d)
             print(d)
 
         elif args.func == 'show' or args.func == 'test':
