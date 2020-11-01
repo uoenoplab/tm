@@ -1,0 +1,4 @@
+python-ipmi
+pandas
+tinydb
+pathlib

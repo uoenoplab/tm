@@ -1,58 +1,64 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.8
 # -*- coding: utf-8 -*-:q
 
-import argparse
+from argparse import ArgumentParser
 import sys
 import pyipmi
 import pyipmi.interfaces
 import socket
 import subprocess
-import shlex
+from shlex import split
 from tinydb import TinyDB, Query
 from tinydb.operations import delete
-import copy
-import pandas as pd
+from copy import copy
+from pandas import DataFrame
 from datetime import datetime, timedelta
 import getpass
+from pathlib import Path
 
-DBFILE = 'tmdb.json'
+DBFILE = '/usr/local/tm/tmdb.json'
+TFTPBOOT = '/var/lib/tftpboot'
 namehelp = 'hostname (e.g., n04)'
 dtfmt = '%d/%m/%y'
-MAXRESERVE = 14
+MAXDAYS = 14
 
 class Tm(object):
-    def __init__(self):
-        self.loaderpath = '/var/lib/tftpboot/pxelinux.cfg'
+    def __init__(self, argv, dbfile=DBFILE, tftpboot=TFTPBOOT):
+        self.output = ''
+        self.tftpboot = tftpboot
+        self.db = TinyDB(dbfile)
         self.ipmi_addr_off = 100
         self.addrs = ('mac', 'ip', 'ipmiaddr', 'ipmipass')
         self.devices = ('disk', 'nic', 'accel')
-        self.db = TinyDB(DBFILE)
         self.user = getpass.getuser()
 
-        parser = argparse.ArgumentParser(
-                description="tm - testbed management tool",
+        parser = ArgumentParser(description="tm - testbed management tool",
                 usage='tm [-h] COMMAND <args>')
         parser.add_argument('command', metavar='COMMAND',
                 choices=['inventory', 'power', 'console', 'reservation'],
                 help='{inventory|power|console}')
-        args = parser.parse_args(sys.argv[1:2])
-        getattr(self, args.command)()
+        args = parser.parse_args(argv[1:2])
+        getattr(self, args.command)(argv)
 
-    def reservation(self):
-        parser = argparse.ArgumentParser(
-                description="tm-reservation - node reservation",
+    def reservation(self, argv):
+        parser = ArgumentParser(description="tm-reservation - node reservation",
                 usage='tm reservation COMMAND [<args>]')
         subparsers = parser.add_subparsers(title='COMMAND')
-        cmds = ('reserve', 'update', 'release', 'show')
+        cmds = ('reserve', 'update', 'release', 'show', 'clean')
         for cmd in cmds:
             p = subparsers.add_parser(cmd,
                     usage='tm reservation {} <args>'.format(cmd))
-            p.add_argument('--node' if cmd == 'show' else 'node',
-                    type=str, help=namehelp)
-            if cmd != 'release' and cmd != 'show':
+            if cmd == 'show':
+                p.add_argument('--node', type=str, help=namehelp)
+            elif cmd == 'clean':
+                p.add_argument('--noexpire', action='store_true',
+                        help='release nodes regardless of expiration')
+            else:
+                p.add_argument('node', type=str, help=namehelp)
+            if cmd == 'reserve' or cmd == 'update':
                 p.add_argument('expire', type=str, help='ddmmyy')
             p.set_defaults(func=cmd)
-        args = parser.parse_args(sys.argv[2:])
+        args = parser.parse_args(argv[2:])
         if not hasattr(args, 'func'): # XXX
             parser.print_help()
             return
@@ -60,56 +66,76 @@ class Tm(object):
         if args.func == 'show':
             ans = self.get_db(node=args.node)
             if not ans:
-                print('no db entry')
+                self.log('no db entry')
                 return
-            df = pd.DataFrame.from_dict(ans)
-            print(df.reindex(columns=('node', 'user', 'expire')))
+            df = DataFrame.from_dict(ans)
+            self.log(df.reindex(columns=('node', 'user', 'expire')))
+            return
+
+        if args.func == 'clean':
+            if self.user != 'root':
+                self.log('clean command must be run by root')
+                return
+            today = datetime.now().date()
+            ans = self.get_db()
+            for v in ans:
+                if not 'user' in v:
+                    continue
+                if (args.noexpire or
+                    today > datetime.strptime(v['expire'], dtfmt).date()):
+                    self.reset_node(v['node'], v['mac'])
             return
 
         r = self.db.get(Query().node == args.node)
         if not r:
-            print('{}: invalid node'.format(args.node))
+            self.log('{}: invalid node'.format(args.node))
             return
-        elif args.func == 'reserve' and 'user' in r:
-            print('{}: node in use ({})'.format(args.node, r['user']))
-            return
-        elif ((args.func == 'release' or args.func == 'update') and
-                'user' not in r):
-            print('{}: node is not reserved'.format(args.node))
-            return
-        elif args.func == 'update' or args.func == 'release':
-            if self.user != r['user']:
-                print('{}: cannot {} reservation of {}'.format(args.node,
-                    args.func, r['user']))
+        elif args.func == 'reserve':
+            if 'user' in r:
+                self.log('{}: node in use ({})'.format(args.node, r['user']))
                 return
+            elif self.user == 'root':
+                self.log('{}: root user cannot reserve nodes'.format(args.node))
+                return
+        elif args.func == 'release' or args.func == 'update':
+            if not self.owner_or_root(args.node):
+                return
+        elif args.func == 'clean':
+            if self.user != 'root':
+                self.log('clean command must be run by root')
 
         if args.func == 'reserve' or args.func == 'update':
             try:
-                dt = datetime.strptime(args.date, dtfmt)
+                dt = datetime.strptime(args.expire, dtfmt)
             except(ValueError):
-                print('expiration date format must be {}, not ',
-                        args.date, dtfmt)
+                self.log('expiration date format must be {}, not ',
+                        args.expire, dtfmt)
                 return
             if dt < datetime.now():
-                print('date must be on or later than today')
+                self.log('date must be on or later than today')
                 return
             else:
-                latest = datetime.now() + timedelta(days=MAXRESERVE)
+                latest = datetime.now() + timedelta(days=MAXDAYS)
                 if dt > latest:
                     dt = latest
-                    print('14 days of the maximum reservation is set')
+                    self.log('14 days of the maximum reservation is set')
+
+            if args.func == 'reserve':
+                if self.set_loader(r['mac'], self.user, args.node):
+                    self.log('{}: reservation successful'.format(args.node))
+                else:
+                    self.log('{}: failed to create symlink'.format(args.node))
+                    return
+
             self.db.update({'user': getpass.getuser(),
                 'expire': dt.strftime(dtfmt)}, Query().node == args.node)
         else:
-            for e in ['user', 'date']:
-                self.db.update(delete(e), Query().node == args.node)
+            self.reset_node(args.node, r['mac'])
+        self.log('{}: {} successful'.format(args.node, args.func))
 
-    def inventory(self):
-        parser = argparse.ArgumentParser(
-                description="tm-inventory - node metadata management",
-                usage='tm inventory COMMAND [<args>]')
-        #parser.add_argument('command', metavar='command', type=str,
-        #        choices=['show', 'test', 'add', 'update', 'delete'])
+    def inventory(self, argv):
+        parser = ArgumentParser(description="tm-inventory - "
+            "node metadata management", usage='tm inventory COMMAND [<args>]')
         subparsers = parser.add_subparsers(title='COMMAND')
 
         for cmd in ('show', 'test'):
@@ -121,7 +147,6 @@ class Tm(object):
                 p.add_argument('--devices', action='store_true',
                         help='I/O peripherals') 
             p.set_defaults(func=cmd)
-
         delete = subparsers.add_parser('delete')
         delete.add_argument('node', type=str, help=namehelp)
         delete.set_defaults(func='delete')
@@ -145,51 +170,48 @@ class Tm(object):
             p.add_argument('node', type=str, help=namehelp)
             p.set_defaults(func=cmd)
 
-        args = parser.parse_args(sys.argv[2:])
+        args = parser.parse_args(argv[2:])
         if not hasattr(args, 'func'): # XXX
             parser.print_help()
             return
         if args.func != 'add' and hasattr(args, 'node'):
             if args.node and None in self.get_addrs(args.node):
-                print('{}: invalid node'.format(args.node))
+                self.log('{}: invalid node'.format(args.node))
                 return
 
         if args.func == 'add' or args.func == 'update':
-            d = copy.copy(vars(args))
+            d = copy(vars(args))
             del d['func']
             if args.func == 'update':
                 del d['node']
                 self.db.update(d, Query().node == args.node)
             else:
                 self.db.insert(d)
-            print(d)
+            self.log('success')
 
         elif args.func == 'show' or args.func == 'test':
             ans = self.get_db(node=args.node)
             if ans is None:
-                print('no db entry')
-                return
-            if args.func == 'show':
-                df = pd.DataFrame.from_dict(ans)
-                columns = list(df.columns)
+                self.log('no db entry')
+            elif args.func == 'show':
+                df = DataFrame.from_dict(ans)
+                cls = list(df.columns)
                 reorders = ('node', 'mac', 'ip', 'ipmiaddr')
                 for i, r in enumerate(reorders):
-                    columns.remove(r)
-                    columns.insert(i, r)
+                    cls.remove(r)
+                    cls.insert(i, r)
                 if args.func == 'show':
-                    if not args.addrs:
-                        columns = [c for c in columns if c not in self.addrs]
-                    if not args.devices:
-                        columns = [c for c in columns if c not in self.devices]
-                print(df.reindex(columns=columns))
-
+                    for a in ('addrs', 'devices'):
+                        if not getattr(args, a):
+                            cls = [c for c in cls if c not in getattr(self, a)]
+                self.log(df.reindex(columns=cls))
             else:
                 for node in ans:
                     # test dns
                     try:
                         addr = socket.gethostbyname(node['node'])
                     except(socket.gaierror):
-                        print('{}: Cannot resolve name. Check /etc/hosts and '
+                        self.log('{}: Cannot resolve name. Check /etc/hosts and '
                               '/etc/dnsmasq.conf'.format(node['node']))
                         return
 
@@ -197,34 +219,35 @@ class Tm(object):
                     msg = (node['node'] +
                             ': Network address {} {} inventory one {}')
                     m = 'unmatches' if addr != node['ip'] else 'matches'
-                    print(msg.format(addr, m, node['ip']))
+                    self.log(msg.format(addr, m, node['ip']))
 
                     if self.def_ipmi_addr(addr) != node['ipmiaddr']:
-                        print('Warning: ipmiaddr {} differs from the '
+                        self.log('Warning: ipmiaddr {} differs from the '
                               'default'.format(self.def_ipmi_addr(addr)))
 
                     # test ipmi
                     cmd = 'ping -c 2 {}'.format(node['ipmiaddr'])
                     msg = node['node'] + ': IPMI {} {}'
                     try:
-                        subprocess.call(shlex.split(cmd),
+                        subprocess.call(split(cmd),
                                 stdout=subprocess.DEVNULL)
-                        print(msg.format(node['ipmiaddr'], 'reachable'))
+                        self.log(msg.format(node['ipmiaddr'], 'reachable'))
                     except(OSError):
-                        print(msg.format(node['ipmiaddr'], 'unreachable'))
+                        self.log(msg.format(node['ipmiaddr'], 'unreachable'))
 
                     # test loader
-                    cmd = 'ls {}'.format(self.loaderpath)
-                    msg = node['node'] + ': loader {} {} in ' + self.loaderpath
+                    loaderpath = Path(self.tftpboot)/'pxelinux.cfg'
+                    cmd = 'ls {}'.format(loaderpath)
+                    msg = node['node'] + ': loader {} {} in ' + loaderpath
                     try:
-                        res = subprocess.check_output(shlex.split(cmd))
+                        res = subprocess.check_output(split(cmd))
                     except(subprocess.CalledProcessError) as e:
-                        print('{}: {} failed {}'.format(node['node'], cmd, e))
+                        self.log('{}: {} failed {}'.format(node['node'], cmd, e))
                         return
                     files = []
                     for f in res.decode().split('\n')[0:-1]:
                         files.append(f.lstrip('01-').replace('-', ':'))
-                    print(msg.format(node['mac'],
+                    self.log(msg.format(node['mac'],
                         'found' if node['mac'] in files else 'not found'))
 
                     # test /etc/dnsmasq.conf
@@ -233,23 +256,23 @@ class Tm(object):
                     try:
                         res = subprocess.getoutput(cmd)
                     except(subprocess.CalledProcessError):
-                        print('{}: failed in {}'.format(node['node'], cmd))
+                        self.log('{}: failed in {}'.format(node['node'], cmd))
                     for line in res.split('\n'):
                         mac, ip, name = line.split(',')
                         if node['node'] == name:
                             if node['mac'] == mac and node['ip'] == ip:
-                                print('{}: MAC and IP address found in '
+                                self.log('{}: MAC and IP address found in '
                                       '/etc/dnsmasq.conf'.format(node['node']))
                                 break
                             if node['mac'] != mac:
-                                print('{}: inventory {} registered {}'.format(
+                                self.log('{}: inventory {} registered {}'.format(
                                     node['mac'], mac))
                             if node['ip'] != ip:
-                                print('{}: inventory {} registered {}'.format(
+                                self.log('{}: inventory {} registered {}'.format(
                                     node['ip'], ip))
                             break
                     else:
-                        print('{}: not in /etc/dnsmasq.conf'.format(
+                        self.log('{}: not in /etc/dnsmasq.conf'.format(
                             node['node']))
                         return
 
@@ -258,21 +281,23 @@ class Tm(object):
             if r:
                 self.db.remove(doc_ids=[r.doc_id,])
             else:
-                print('{} does not exist in the db'.format(args.node))
+                self.log('{} does not exist in the db'.format(args.node))
 
-    def power(self):
-        parser = argparse.ArgumentParser(
-                description="tm-power - power management",
-                usage='tm power COMMAND <node>')
+    def power(self, argv):
+        parser = ArgumentParser(description="tm-power - power management",
+                    usage='tm power COMMAND <node>')
         parser.add_argument('command', metavar='COMMAND', type=str,
         choices=['status', 'poweron', 'poweroff', 'restart'],
                 help='{status|poweron|poweroff|restart}')
         parser.add_argument('node', type=str, help=namehelp)
+        args = parser.parse_args(argv[2:])
 
-        args = parser.parse_args(sys.argv[2:])
+        if args.command != 'status':
+            if not self.owner_or_root(args.node, needuser=False):
+                return
         addr = self.get_addrs(args.node)[1]
         if not addr:
-            print('{} does not exist'.format(args.node))
+            self.log('{} does not exist'.format(args.node))
             return
         interface = pyipmi.interfaces.create_interface('ipmitool',
                 interface_type='lanplus')
@@ -292,33 +317,57 @@ class Tm(object):
                 elif args.command == 'poweron':
                     r = ipmi.chassis_control_power_up()
                 elif args.command == 'restart':
-                    r = ipmi.chassis_control_power_cycle()
+                    try:
+                        r = ipmi.chassis_control_power_cycle()
+                    except(pyipmi.errors.CompletionCodeError):
+                        self.log('{}: failed to {}, '
+                              'perhaps the power is off?'.format(
+                              args.node, args.command))
                 break
             except(RuntimeError):
                 pass
         ipmi.session.close()
         if r:
-            print('{}'.format('poweron' if r.__dict__['power_on']
+            self.log('{}'.format('poweron' if r.__dict__['power_on']
                 else 'poweroff'))
 
-    def console(self):
-        parser = argparse.ArgumentParser(
-                description="tm-console - console connection.",
-                usage='tm console <node>')
-        parser.add_argument('node', type=str,
-                help=namehelp)
-        args = parser.parse_args(sys.argv[2:])
+    def console(self, argv):
+        parser = ArgumentParser(description="tm-console - access console.",
+                    usage='tm console <node>')
+        parser.add_argument('node', type=str, help=namehelp)
+        args = parser.parse_args(argv[2:])
+
+        if not self.owner_or_root(args.node, needuser=False):
+            return
         addrs = self.get_addrs(args.node)
         if None in addrs:
-            print('{}: invalid node'.format(args.node))
+            self.log('{}: invalid node'.format(args.node))
             return
 
         r = self.db.get(Query().node == args.node)
         userpass = r['ipmipass'].split(',')
         cmd = 'ipmitool -I lanplus -H {} -U {} -P {} sol activate'.format(
                 addrs[1], userpass[0], userpass[1])
-        subprocess.call(shlex.split(cmd))
+        subprocess.call(split(cmd))
         print('\n')
+
+    def log(self, output):
+        self.output = output
+
+    def owner_or_root(self, node, needuser=True):
+        r = self.db.get(Query().node == node)
+        if not r:
+            self.log('{}: not in inventory'.format(node))
+            return False
+        elif 'user' not in r:
+            if not needuser and self.user == 'root':
+                return True
+            elif needuser:
+                self.log('{}: node is not reserved'.format(node))
+            elif self.user != 'root':
+                self.log('{}: need reservation or to be root'.format(node))
+            return False
+        return True if self.user == r['user'] or self.user == 'root' else False
 
     def def_ipmi_addr(self, addr):
         iaddr = addr.split('.')
@@ -329,13 +378,34 @@ class Tm(object):
         r = self.db.get(Query().node == name)
         return (r['ip'], self.def_ipmi_addr(r['ip'])) if r else (None, None)
 
+    def set_loader(self, mac, d, node):
+        dst = Path(self.tftpboot)/'pxelinux.cfg'/('01-'+mac.replace(':', '-'))
+        # Unset existing one
+        try:
+            dst.unlink()
+        except:
+            print('{}: cannot remove the link {}'.format(node, dst))
+        # set new one
+        src = Path('../')/'loaders'/d/node
+        try:
+            dst.symlink_to(src)
+            return True
+        except:
+            print('{}: failed to link to'.format(node, src))
+            return False
+
+    def reset_node(self, node, mac):
+        if not self.set_loader(mac, 'base', node):
+            print('{}: cannot restore symlink for {}'.format(node, mac))
+        for e in ['user', 'expire']:
+            self.db.update(delete(e), Query().node == node)
+
     def get_db(self, node=None):
         if node:
             res = [self.db.get(Query().node == node)]
             return None if res[0] is None else res
-        else:
-            res = self.db.all()
-            return None if len(res) == 0 else res
+        res = self.db.all()
+        return None if len(res) == 0 else res
 
 if __name__ == '__main__':
-    Tm()
+    print(Tm(sys.argv).output)

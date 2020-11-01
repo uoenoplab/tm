@@ -1,0 +1,17 @@
+language: python
+python:
+    - "3.8"
+install: 
+    - pip install -r requirements.txt
+    - mkdir -p test_tftpboot/pxelinux.cfg
+    - mkdir -p test_tftpboot/loaders/base
+    - touch test_tftpboot/loaders/base/n01
+    - touch test_tftpboot/loaders/base/n02
+    - touch test_tftpboot/loaders/base/n03
+    - mkdir test_tftpboot/loaders/`whoami`
+    - touch test_tftpboot/loaders/`whoami`/n01
+    - touch test_tftpboot/loaders/`whoami`/n02
+    - touch test_tftpboot/loaders/`whoami`/n03
+    - touch test_tmdb.json
+script: 
+    - pytest tests

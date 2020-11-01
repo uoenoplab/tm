@@ -1,0 +1,19 @@
+[Unit]
+Description=Clean up tm reservations expired
+ConditionACPower=true
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tm reservation clean
+User=root
+ProtectSystem=strict
+ReadWritePaths=/usr/local/tm
+Nice=19
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+ProtectControlGroups=true
+ProtectKernelModules=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target
