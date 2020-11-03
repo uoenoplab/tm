@@ -108,8 +108,8 @@ class Tm(object):
             try:
                 dt = datetime.strptime(args.expire, dtfmt)
             except(ValueError):
-                self.log('expiration date format must be {}, not ',
-                        args.expire, dtfmt)
+                self.log('expiration date format must be dd/mm/yy'
+                         ', not {}'.format(args.expire))
                 return
             if dt < datetime.now():
                 self.log('date must be on or later than today')
@@ -121,9 +121,7 @@ class Tm(object):
                     self.log('14 days of the maximum reservation is set')
 
             if args.func == 'reserve':
-                if self.set_loader(r['mac'], self.user, args.node):
-                    self.log('{}: reservation successful'.format(args.node))
-                else:
+                if not self.set_loader(r['mac'], self.user, args.node):
                     self.log('{}: failed to create symlink'.format(args.node))
                     return
 
@@ -396,7 +394,7 @@ class Tm(object):
 
     def reset_node(self, node, mac):
         if not self.set_loader(mac, 'base', node):
-            print('{}: cannot restore symlink for {}'.format(node, mac))
+            self.log('{}: cannot restore symlink for {}'.format(node, mac))
         for e in ['user', 'expire']:
             self.db.update(delete(e), Query().node == node)
 

@@ -9,6 +9,7 @@ sudo chmod 754 /usr/local/bin/tm
 sudo mkdir /usr/local/tm
 sudo chmod 775 /usr/local/tm
 ```
+
 In Ubuntu 18.04
 ```
 sudo cp tm-cleanup.* /lib/systemd/system/
