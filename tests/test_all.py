@@ -55,5 +55,5 @@ def test_all():
     assert search(ret_rsv_update_success, out)
 
     out = Tm(shlex.split('tm reservation release n01'),
-            dbfile=dbf, tftpboot=tfb).output
+            dbfile=dbf, tftpboot=tfb, test=True).output
     assert search(ret_rsv_release_success, out)

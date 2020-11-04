@@ -23,7 +23,7 @@ dtfmt = '%d/%m/%y'
 MAXDAYS = 14
 
 class Tm(object):
-    def __init__(self, argv, dbfile=DBFILE, tftpboot=TFTPBOOT):
+    def __init__(self, argv, dbfile=DBFILE, tftpboot=TFTPBOOT, test=False):
         self.output = ''
         self.tftpboot = tftpboot
         self.db = TinyDB(dbfile)
@@ -31,6 +31,7 @@ class Tm(object):
         self.addrs = ('mac', 'ip', 'ipmiaddr', 'ipmipass')
         self.devices = ('disk', 'nic', 'accel')
         self.user = getpass.getuser()
+        self.test = test
 
         parser = ArgumentParser(description="tm - testbed management tool",
                 usage='tm [-h] COMMAND <args>')
@@ -83,7 +84,8 @@ class Tm(object):
                     continue
                 if (args.noexpire or
                     today > datetime.strptime(v['expire'], dtfmt).date()):
-                    self.power(split('tm power poweroff {}'.format(v['node'])))
+                    if not self.test:
+                        self.power(split('tm power poweroff {}'.format(v['node'])))
                     self.reset_node(v['node'], v['mac'])
             return
 
@@ -130,7 +132,8 @@ class Tm(object):
             self.db.update({'user': getpass.getuser(),
                 'expire': dt.strftime(dtfmt)}, Query().node == args.node)
         else:
-            self.power(split('tm power poweroff {}'.format(args.node)))
+            if not self.test:
+                self.power(split('tm power poweroff {}'.format(args.node)))
             self.reset_node(args.node, r['mac'])
         self.log('{}: {} successful'.format(args.node, args.func))
 
