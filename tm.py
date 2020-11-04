@@ -1,5 +1,5 @@
 #!/usr/bin/env python3.8
-# -*- coding: utf-8 -*-:q
+# -*- coding: utf-8 -*-
 
 from argparse import ArgumentParser
 import sys
@@ -143,7 +143,8 @@ class Tm(object):
         subparsers = parser.add_subparsers(title='COMMAND')
 
         for cmd in ('show', 'test'):
-            p = subparsers.add_parser(cmd, usage='tm inventory show [<args>]')
+            p = subparsers.add_parser(cmd,
+                    usage='tm inventory {} [<args>]'.format(cmd))
             p.add_argument('--node', type=str, help=namehelp)
             if cmd == 'show':
                 p.add_argument('--addrs', action='store_true',
@@ -223,7 +224,7 @@ class Tm(object):
                     msg = (node['node'] +
                             ': Network address {} {} inventory one {}')
                     m = 'unmatches' if addr != node['ip'] else 'matches'
-                    self.log(msg.format(addr, m, node['ip']))
+                    print(msg.format(addr, m, node['ip']))
 
                     if self.def_ipmi_addr(addr) != node['ipmiaddr']:
                         self.log('Warning: ipmiaddr {} differs from the '
@@ -235,14 +236,14 @@ class Tm(object):
                     try:
                         subprocess.call(split(cmd),
                                 stdout=subprocess.DEVNULL)
-                        self.log(msg.format(node['ipmiaddr'], 'reachable'))
+                        print(msg.format(node['ipmiaddr'], 'reachable'))
                     except(OSError):
-                        self.log(msg.format(node['ipmiaddr'], 'unreachable'))
+                        print(msg.format(node['ipmiaddr'], 'unreachable'))
 
                     # test loader
                     loaderpath = Path(self.tftpboot)/'pxelinux.cfg'
                     cmd = 'ls {}'.format(loaderpath)
-                    msg = node['node'] + ': loader {} {} in ' + loaderpath
+                    msg = node['node'] + ': loader {} {} in ' + str(loaderpath)
                     try:
                         res = subprocess.check_output(split(cmd))
                     except(subprocess.CalledProcessError) as e:
@@ -251,7 +252,7 @@ class Tm(object):
                     files = []
                     for f in res.decode().split('\n')[0:-1]:
                         files.append(f.lstrip('01-').replace('-', ':'))
-                    self.log(msg.format(node['mac'],
+                    print(msg.format(node['mac'],
                         'found' if node['mac'] in files else 'not found'))
 
                     # test /etc/dnsmasq.conf
@@ -260,23 +261,23 @@ class Tm(object):
                     try:
                         res = subprocess.getoutput(cmd)
                     except(subprocess.CalledProcessError):
-                        self.log('{}: failed in {}'.format(node['node'], cmd))
+                        print('{}: failed in {}'.format(node['node'], cmd))
                     for line in res.split('\n'):
                         mac, ip, name = line.split(',')
                         if node['node'] == name:
                             if node['mac'] == mac and node['ip'] == ip:
-                                self.log('{}: MAC and IP address found in '
+                                print('{}: MAC and IP address found in '
                                       '/etc/dnsmasq.conf'.format(node['node']))
                                 break
                             if node['mac'] != mac:
-                                self.log('{}: inventory {} registered {}'.format(
+                                print('{}: inventory {} registered {}'.format(
                                     node['mac'], mac))
                             if node['ip'] != ip:
-                                self.log('{}: inventory {} registered {}'.format(
+                                print('{}: inventory {} registered {}'.format(
                                     node['ip'], ip))
                             break
                     else:
-                        self.log('{}: not in /etc/dnsmasq.conf'.format(
+                        print('{}: not in /etc/dnsmasq.conf'.format(
                             node['node']))
                         return
 
