@@ -83,6 +83,7 @@ class Tm(object):
                     continue
                 if (args.noexpire or
                     today > datetime.strptime(v['expire'], dtfmt).date()):
+                    self.power(split('tm power poweroff {}'.format(v['node'])))
                     self.reset_node(v['node'], v['mac'])
             return
 
@@ -106,19 +107,20 @@ class Tm(object):
 
         if args.func == 'reserve' or args.func == 'update':
             try:
-                dt = datetime.strptime(args.expire, dtfmt)
+                dt = datetime.strptime(args.expire, dtfmt).date()
             except(ValueError):
                 self.log('expiration date format must be dd/mm/yy'
                          ', not {}'.format(args.expire))
                 return
-            if dt < datetime.now():
+            today = datetime.now().date()
+            if dt < today:
                 self.log('date must be on or later than today')
                 return
             else:
-                latest = datetime.now() + timedelta(days=MAXDAYS)
+                latest = (datetime.now() + timedelta(days=MAXDAYS)).date()
                 if dt > latest:
                     dt = latest
-                    self.log('14 days of the maximum reservation is set')
+                    print('14 days of the maximum reservation is set')
 
             if args.func == 'reserve':
                 if not self.set_loader(r['mac'], self.user, args.node):
@@ -128,6 +130,7 @@ class Tm(object):
             self.db.update({'user': getpass.getuser(),
                 'expire': dt.strftime(dtfmt)}, Query().node == args.node)
         else:
+            self.power(split('tm power poweroff {}'.format(args.node)))
             self.reset_node(args.node, r['mac'])
         self.log('{}: {} successful'.format(args.node, args.func))
 
