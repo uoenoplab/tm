@@ -22,6 +22,7 @@ namehelp = 'hostname (e.g., n04)'
 dtfmt = '%d/%m/%y'
 MAXDAYS = 14
 
+
 class Tm(object):
     def __init__(self, argv, dbfile=DBFILE, tftpboot=TFTPBOOT, test=False):
         self.output = ''
@@ -32,6 +33,7 @@ class Tm(object):
         self.devices = ('disk', 'nic', 'accel')
         self.user = getpass.getuser()
         self.test = test
+        self.init_msgs()
 
         parser = ArgumentParser(description="tm - testbed management tool",
                 usage='tm [-h] COMMAND <args>')
@@ -67,15 +69,16 @@ class Tm(object):
         if args.func == 'show':
             ans = self.get_db(node=args.node)
             if not ans:
-                self.log('no db entry')
+                self.pr_msg('empty_db', args.node)
                 return
             df = DataFrame.from_dict(ans)
-            self.log(df.reindex(columns=('node', 'user', 'expire')))
+            self.pr_msg('df', None,
+                    df.reindex(columns=('node', 'user', 'expire')))
             return
 
         if args.func == 'clean':
             if self.user != 'root':
-                self.log('clean command must be run by root')
+                self.pr_msg('clean_must_be_root', None)
                 return
             today = datetime.now().date()
             ans = self.get_db()
@@ -91,21 +94,22 @@ class Tm(object):
 
         r = self.db.get(Query().node == args.node)
         if not r:
-            self.log('{}: invalid node'.format(args.node))
+            self.pr_msg('invalid_node', args.node)
+            #self.log('{}: invalid node'.format(args.node))
             return
         elif args.func == 'reserve':
             if 'user' in r:
-                self.log('{}: node in use ({})'.format(args.node, r['user']))
+                self.pr_msg('node_in_use2', args.node, r['user'])
                 return
             elif self.user == 'root':
-                self.log('{}: root user cannot reserve nodes'.format(args.node))
+                self.pr_msg('reserve_by_root', args.node)
                 return
         elif args.func == 'release' or args.func == 'update':
             if not self.owner_or_root(args.node):
                 return
         elif args.func == 'clean':
             if self.user != 'root':
-                self.log('clean command must be run by root')
+                self.pr_msg('clean_must_be_root', None)
 
         if args.func == 'reserve' or args.func == 'update':
             try:
@@ -328,6 +332,7 @@ class Tm(object):
                         self.log('{}: failed to {}, '
                               'perhaps the power is off?'.format(
                               args.node, args.command))
+
                 break
             except(RuntimeError):
                 pass
@@ -362,7 +367,7 @@ class Tm(object):
     def owner_or_root(self, node, needuser=True):
         r = self.db.get(Query().node == node)
         if not r:
-            self.log('{}: not in inventory'.format(node))
+            self.pr_msg('not_in_inventory', node)
             return False
         elif 'user' not in r:
             if not needuser and self.user == 'root':
@@ -411,6 +416,39 @@ class Tm(object):
             return None if res[0] is None else res
         res = self.db.all()
         return None if len(res) == 0 else res
+
+    def init_msgs(self):
+        self.msgs = {
+            'empty_db': 'empty database',
+            'not_in_inventory': 'not in inventory',
+            'clean_must_be_root': 'clean command must be run by root',
+            'invalid_node': 'invalid node',
+            'node_in_use2': ' node in use by {}',
+            'reserve_by_root': 'root user cannot reserve nodes',
+            'invalid_date_format': 'date format must be dd/mm/yy',
+            'invalid_date': 'date must be on or later than today',
+            'shrinked_date': '7 days of the maximum reservation has been set',
+            'symlink_fail': 'failed to create symlink',
+            'success2': '{} successful',
+            'no_host': 'no network name - check hosts and dnsmasq.conf',
+            'non_def_ipmi': 'ipmi addr {} differs from the defaule one',
+            'reachable': 'reachable',
+            'unreachable': 'unreachable',
+            'no_dnsmasq_conf': 'not in /etc/dnsmasq.conf',
+            'fail2': 'failed in {}',
+            'fail3': '{} failed in {}',
+            'no_db': 'is not in the db',
+            'power': '{}',
+            'fail_restart': 'failed to restart, perhaps the power is off',
+            'df': '{}',
+        }
+
+    def pr_msg(self, type, node, *args):
+        m = ''
+        if node:
+            m = '{}: '.format(node)
+        m += self.msgs[type].format(*args)
+        print(m)
 
 if __name__ == '__main__':
     print(Tm(sys.argv).output)
