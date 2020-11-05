@@ -1,4 +1,4 @@
-from tm import Tm
+from tm import Tm, TmMsgs
 import shlex
 from re import search
 from datetime import datetime, timedelta
@@ -18,13 +18,12 @@ ret_rsv_update_success = 'update successful'
 ret_rsv_release_success = 'release successful'
 
 def test_all():
-    out = Tm(shlex.split('tm inventory show'), dbfile=dbf, tftpboot=tfb).output
-    assert search('no db entry', out)
-
+    out = Tm(split('tm inventory show'), dbfile=dbf, tftpboot=tfb).output
+    assert out == TmMsg.empty_db()
     for a in addnodes:
-        out = Tm(shlex.split(a), dbfile=dbf, tftpboot=tfb).output
-        assert search('success', out)
-    out = Tm(shlex.split('tm inventory show --addr --devices'), dbfile=dbf, tftpboot=tfb).output
+        out = Tm(split(a), dbfile=dbf, tftpboot=tfb).output
+        assert out == TmMsg.success(split(a)[-1])
+    out = Tm(split('tm inventory show --addr --devices'), dbfile=dbf, tftpboot=tfb).output
     for n in ['n01', 'n02', 'n03']:
         assert n in out['node'].values
         for i in ['mac', 'ip', 'ipmiaddr', 'ipmipass', 'cpu', 'ram']:
@@ -38,8 +37,9 @@ def test_all():
     nowp10 = now + timedelta(days=10)
     nowp10_s = datetime.strftime(nowp10, '%d/%m/%y')
 
-    out = Tm(shlex.split('tm reservation reserve n01 {}'.format(nowm1_s)),
+    out = Tm(split('tm reservation reserve n01 {}'.format(nowm1_s)),
             dbfile=dbf, tftpboot=tfb).output
+    assert out == TmMsg.invalid_date(split(cmd)[-1])
     assert search(ret_rsv_date_past, out)
 
     out = Tm(shlex.split('tm reservation reserve n01 {}'.format(nowp1_s)),

@@ -22,6 +22,56 @@ namehelp = 'hostname (e.g., n04)'
 dtfmt = '%d/%m/%y'
 MAXDAYS = 14
 
+class TmMsg(object):
+    def empty_db():
+        return 'empty database'
+    def not_in_inventory(node):
+        return '{}: not in inventory'.format(node)
+    def non_root_clean():
+        return 'clean command must be run by root'
+    def invalid_node(node):
+        return '{}: invalid node'.format(node)
+    def not_reserved(node):
+        return '{}: not reserved'.format(node)
+    def need_owner_or_root(node):
+        return '{}: need reservation or to be root'.format(node)
+    def in_use(node, user):
+        return '{}: in use by {}'.format(node, user)
+    def root_reserve():
+        return 'root cannot reserve nodes'
+    def invalid_date_format():
+        return 'date format must be dd/mm/yy'
+    def invalid_date():
+        return  'date must be on or later than today'
+    def shrinked_date(days):
+        return 'set {} days of the maximum duration'.format(days)
+    def symlink_fail(node):
+        return '{}: failed to create symlink'.format(node)
+    def restore_fail(node, mac):
+        return '{}: cannot restore symlink for {}'.format(node, mac)
+    def success(node, ops):
+        return '{}: {} success'.format(node, ops)
+    def no_host(node):
+        return '{}: no network name - check system configuration'.format(node)
+    def non_default_ipmi(node, addr, def_addr):
+        return '{}: ipmi addr {} differs from the defaule one {}'.format(
+                node, addr, def_addr)
+    def reachable(node):
+        return 'reachable'
+    def unreachable(node):
+        return 'unreachable'
+    def no_dnsmasq_conf(node):
+        return '{}: not in /etc/dnsmasq.conf'.format(node)
+    def fail2(node, cmd):
+        return '{}: failed in {}'.format(node, cmd)
+    def no_db(node):
+        return '{} is not in the db'.format(node)
+    def opaque(m):
+        return '{}'.format(m)
+    def df(d):
+        return '{}'.format(d)
+    def fail_restart(node):
+        return '{}: failed to restart, perhaps the power is off'.format(node)
 
 class Tm(object):
     def __init__(self, argv, dbfile=DBFILE, tftpboot=TFTPBOOT, test=False):
@@ -33,7 +83,6 @@ class Tm(object):
         self.devices = ('disk', 'nic', 'accel')
         self.user = getpass.getuser()
         self.test = test
-        self.init_msgs()
 
         parser = ArgumentParser(description="tm - testbed management tool",
                 usage='tm [-h] COMMAND <args>')
@@ -69,16 +118,18 @@ class Tm(object):
         if args.func == 'show':
             ans = self.get_db(node=args.node)
             if not ans:
-                self.pr_msg('empty_db', args.node)
+                if args.node:
+                    self.pr_msg(TmMsg.no_db(args.node))
+                else:
+                    self.pr_msg(TmMsg.empty_db())
                 return
-            df = DataFrame.from_dict(ans)
-            self.pr_msg('df', None,
-                    df.reindex(columns=('node', 'user', 'expire')))
+            self.pr_msg(TmMsg.opaque(DataFrame.from_dict(ans).reindex(
+                columns=('node', 'user', 'expire'))))
             return
 
         if args.func == 'clean':
             if self.user != 'root':
-                self.pr_msg('clean_must_be_root', None)
+                self.pr_msg(TmMsg.non_root_clean())
                 return
             today = datetime.now().date()
             ans = self.get_db()
@@ -94,43 +145,41 @@ class Tm(object):
 
         r = self.db.get(Query().node == args.node)
         if not r:
-            self.pr_msg('invalid_node', args.node)
-            #self.log('{}: invalid node'.format(args.node))
+            self.pr_msg(TmMsg.invalid_node(args.node))
             return
         elif args.func == 'reserve':
             if 'user' in r:
-                self.pr_msg('node_in_use2', args.node, r['user'])
+                self.pr_msg(TmMsg.in_use(args.node, r['user']))
                 return
             elif self.user == 'root':
-                self.pr_msg('reserve_by_root', args.node)
+                self.pr_msg(TmMsg.root_reserve(args.node))
                 return
         elif args.func == 'release' or args.func == 'update':
             if not self.owner_or_root(args.node):
                 return
         elif args.func == 'clean':
             if self.user != 'root':
-                self.pr_msg('clean_must_be_root', None)
+                self.pr_msg(TmMsg.non_root_clean())
 
         if args.func == 'reserve' or args.func == 'update':
             try:
                 dt = datetime.strptime(args.expire, dtfmt).date()
             except(ValueError):
-                self.log('expiration date format must be dd/mm/yy'
-                         ', not {}'.format(args.expire))
+                self.pr_msg(TmMsg.invalid_date_format())
                 return
             today = datetime.now().date()
             if dt < today:
-                self.log('date must be on or later than today')
+                self.pr_msg(TmMsg.invalid_date())
                 return
             else:
                 latest = (datetime.now() + timedelta(days=MAXDAYS)).date()
                 if dt > latest:
                     dt = latest
-                    print('14 days of the maximum reservation is set')
+                    self.pr_msg(TmMsg.shrinked_date(MAXDAYS))
 
             if args.func == 'reserve':
                 if not self.set_loader(r['mac'], self.user, args.node):
-                    self.log('{}: failed to create symlink'.format(args.node))
+                    self.pr_msg(TmMsg.symlink_fail(args.node))
                     return
 
             self.db.update({'user': getpass.getuser(),
@@ -139,7 +188,7 @@ class Tm(object):
             if not self.test:
                 self.power(split('tm power poweroff {}'.format(args.node)))
             self.reset_node(args.node, r['mac'])
-        self.log('{}: {} successful'.format(args.node, args.func))
+        self.pr_msg(TmMsg.success(args.node, args.func))
 
     def inventory(self, argv):
         parser = ArgumentParser(description="tm-inventory - "
@@ -185,7 +234,7 @@ class Tm(object):
             return
         if args.func != 'add' and hasattr(args, 'node'):
             if args.node and None in self.get_addrs(args.node):
-                self.log('{}: invalid node'.format(args.node))
+                self.pr_msg(TmMsg.invalid_node(args.node))
                 return
 
         if args.func == 'add' or args.func == 'update':
@@ -196,12 +245,15 @@ class Tm(object):
                 self.db.update(d, Query().node == args.node)
             else:
                 self.db.insert(d)
-            self.log('success')
+            self.pr_msg(TmMsg.opaque('success'))
 
         elif args.func == 'show' or args.func == 'test':
             ans = self.get_db(node=args.node)
             if ans is None:
-                self.log('no db entry')
+                if args.node:
+                    self.pr_msg(TmMsg.no_db(args.node))
+                else:
+                    self.pr_msg(TmMsg.empty_db())
             elif args.func == 'show':
                 df = DataFrame.from_dict(ans)
                 cls = list(df.columns)
@@ -213,15 +265,14 @@ class Tm(object):
                     for a in ('addrs', 'devices'):
                         if not getattr(args, a):
                             cls = [c for c in cls if c not in getattr(self, a)]
-                self.log(df.reindex(columns=cls))
+                self.pr_msg(TmMsg.df(df.reindex(columns=cls)))
             else:
                 for node in ans:
                     # test dns
                     try:
                         addr = socket.gethostbyname(node['node'])
                     except(socket.gaierror):
-                        self.log('{}: Cannot resolve name. Check /etc/hosts and '
-                              '/etc/dnsmasq.conf'.format(node['node']))
+                        self.pr_msg(TmMsg.no_host(node['node']))
                         return
 
                     # compare with those registered to inventory
@@ -231,8 +282,8 @@ class Tm(object):
                     print(msg.format(addr, m, node['ip']))
 
                     if self.def_ipmi_addr(addr) != node['ipmiaddr']:
-                        self.log('Warning: ipmiaddr {} differs from the '
-                              'default'.format(self.def_ipmi_addr(addr)))
+                        self.pr_msg(TmMsg.non_default_ipmi(
+                            self.def_ipmi_addr(addr), node['ipmiaddr']))
 
                     # test ipmi
                     cmd = 'ping -c 2 {}'.format(node['ipmiaddr'])
@@ -251,7 +302,7 @@ class Tm(object):
                     try:
                         res = subprocess.check_output(split(cmd))
                     except(subprocess.CalledProcessError) as e:
-                        self.log('{}: {} failed {}'.format(node['node'], cmd, e))
+                        self.pr_msg(TmMsg.fail2(node['node'], cmd))
                         return
                     files = []
                     for f in res.decode().split('\n')[0:-1]:
@@ -265,7 +316,7 @@ class Tm(object):
                     try:
                         res = subprocess.getoutput(cmd)
                     except(subprocess.CalledProcessError):
-                        print('{}: failed in {}'.format(node['node'], cmd))
+                        self.pr_msg(TmMsg.fail2(node['node'], cmd))
                     for line in res.split('\n'):
                         mac, ip, name = line.split(',')
                         if node['node'] == name:
@@ -281,8 +332,7 @@ class Tm(object):
                                     node['ip'], ip))
                             break
                     else:
-                        print('{}: not in /etc/dnsmasq.conf'.format(
-                            node['node']))
+                        self.pr_msg(TmMsg.no_dnsmasq_conf(node['node']))
                         return
 
         elif args.func == 'delete':
@@ -290,7 +340,7 @@ class Tm(object):
             if r:
                 self.db.remove(doc_ids=[r.doc_id,])
             else:
-                self.log('{} does not exist in the db'.format(args.node))
+                self.pr_msg(TmMsg.no_db(args.node))
 
     def power(self, argv):
         parser = ArgumentParser(description="tm-power - power management",
@@ -306,7 +356,7 @@ class Tm(object):
                 return
         addr = self.get_addrs(args.node)[1]
         if not addr:
-            self.log('{} does not exist'.format(args.node))
+            self.pr_msg(TmMsg.not_in_inventory(args.node))
             return
         interface = pyipmi.interfaces.create_interface('ipmitool',
                 interface_type='lanplus')
@@ -329,16 +379,14 @@ class Tm(object):
                     try:
                         r = ipmi.chassis_control_power_cycle()
                     except(pyipmi.errors.CompletionCodeError):
-                        self.log('{}: failed to {}, '
-                              'perhaps the power is off?'.format(
-                              args.node, args.command))
+                        self.pr_msg(TmMsg.fail_restart(args.node, args.command))
 
                 break
             except(RuntimeError):
                 pass
         ipmi.session.close()
         if r:
-            self.log('{}'.format('poweron' if r.__dict__['power_on']
+            self.pr_msg(TmMsg.opaque('poweron' if r.__dict__['power_on']
                 else 'poweroff'))
 
     def console(self, argv):
@@ -351,7 +399,7 @@ class Tm(object):
             return
         addrs = self.get_addrs(args.node)
         if None in addrs:
-            self.log('{}: invalid node'.format(args.node))
+            self.pr_msg(TmMsg.invalid_node(args.node))
             return
 
         r = self.db.get(Query().node == args.node)
@@ -367,15 +415,15 @@ class Tm(object):
     def owner_or_root(self, node, needuser=True):
         r = self.db.get(Query().node == node)
         if not r:
-            self.pr_msg('not_in_inventory', node)
+            self.pr_msg(TmMsg.invalid_node(node))
             return False
         elif 'user' not in r:
             if not needuser and self.user == 'root':
                 return True
             elif needuser:
-                self.log('{}: node is not reserved'.format(node))
+                self.pr_msg(TmMsg.not_reserved(node))
             elif self.user != 'root':
-                self.log('{}: need reservation or to be root'.format(node))
+                self.pr_msg(TmMsg.need_owner_or_root(node))
             return False
         return True if self.user == r['user'] or self.user == 'root' else False
 
@@ -406,7 +454,7 @@ class Tm(object):
 
     def reset_node(self, node, mac):
         if not self.set_loader(mac, 'base', node):
-            self.log('{}: cannot restore symlink for {}'.format(node, mac))
+            self.pr_msg(TmMsg.restore_fail(node, mac))
         for e in ['user', 'expire']:
             self.db.update(delete(e), Query().node == node)
 
@@ -417,38 +465,8 @@ class Tm(object):
         res = self.db.all()
         return None if len(res) == 0 else res
 
-    def init_msgs(self):
-        self.msgs = {
-            'empty_db': 'empty database',
-            'not_in_inventory': 'not in inventory',
-            'clean_must_be_root': 'clean command must be run by root',
-            'invalid_node': 'invalid node',
-            'node_in_use2': ' node in use by {}',
-            'reserve_by_root': 'root user cannot reserve nodes',
-            'invalid_date_format': 'date format must be dd/mm/yy',
-            'invalid_date': 'date must be on or later than today',
-            'shrinked_date': '7 days of the maximum reservation has been set',
-            'symlink_fail': 'failed to create symlink',
-            'success2': '{} successful',
-            'no_host': 'no network name - check hosts and dnsmasq.conf',
-            'non_def_ipmi': 'ipmi addr {} differs from the defaule one',
-            'reachable': 'reachable',
-            'unreachable': 'unreachable',
-            'no_dnsmasq_conf': 'not in /etc/dnsmasq.conf',
-            'fail2': 'failed in {}',
-            'fail3': '{} failed in {}',
-            'no_db': 'is not in the db',
-            'power': '{}',
-            'fail_restart': 'failed to restart, perhaps the power is off',
-            'df': '{}',
-        }
-
-    def pr_msg(self, type, node, *args):
-        m = ''
-        if node:
-            m = '{}: '.format(node)
-        m += self.msgs[type].format(*args)
-        print(m)
+    def pr_msg(self, msg):
+        self.output = msg
 
 if __name__ == '__main__':
     print(Tm(sys.argv).output)
