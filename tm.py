@@ -15,6 +15,7 @@ from pandas import DataFrame
 from datetime import datetime, timedelta
 import getpass
 from pathlib import Path
+from re import match
 
 DBFILE = '/usr/local/tm/tmdb.json'
 TFTPBOOT = '/var/lib/tftpboot'
@@ -123,8 +124,8 @@ class Tm(object):
                 else:
                     self.pr_msg(TmMsg.empty_db())
                 return
-            self.pr_msg(TmMsg.opaque(DataFrame.from_dict(ans).reindex(
-                columns=('node', 'user', 'expire'))))
+            self.pr_msg(DataFrame.from_dict(ans).reindex(
+                columns=('node', 'user', 'expire')))
             return
 
         if args.func == 'clean':
@@ -238,6 +239,24 @@ class Tm(object):
                 return
 
         if args.func == 'add' or args.func == 'update':
+
+            if args.mac:
+                if not self.is_mac(args.mac):
+                    self.pr_msg(TmMsg.no_mac(args.node, args.mac))
+                    return
+            if args.ip:
+                if not self.is_ipaddr(args.ip):
+                    self.pr_msg(TmMsg.no_mac(args.node, args.ip))
+                    return
+            if args.ipmiaddr:
+                if not self.is_ipaddr(args.ipmiaddr):
+                    self.pr_msg(TmMsg.no_mac(args.node, args.ipmiaddr))
+                    return
+            if args.ipmipass:
+                if not self.is_ipmipass(args.ipmipass):
+                    self.pr_msg(TmMsg.no_ipmi_pass(args.node, args.ipmipass))
+                    return
+
             d = copy(vars(args))
             del d['func']
             if args.func == 'update':
@@ -245,7 +264,7 @@ class Tm(object):
                 self.db.update(d, Query().node == args.node)
             else:
                 self.db.insert(d)
-            self.pr_msg(TmMsg.opaque('success'))
+            self.pr_msg(TmMsg.success(args.node, args.func))
 
         elif args.func == 'show' or args.func == 'test':
             ans = self.get_db(node=args.node)
@@ -265,7 +284,7 @@ class Tm(object):
                     for a in ('addrs', 'devices'):
                         if not getattr(args, a):
                             cls = [c for c in cls if c not in getattr(self, a)]
-                self.pr_msg(TmMsg.df(df.reindex(columns=cls)))
+                self.pr_msg(df.reindex(columns=cls))
             else:
                 for node in ans:
                     # test dns
@@ -435,6 +454,36 @@ class Tm(object):
     def get_addrs(self, name):
         r = self.db.get(Query().node == name)
         return (r['ip'], self.def_ipmi_addr(r['ip'])) if r else (None, None)
+
+    def is_mac(self, mac):
+        l = mac.split(':')
+        if len(l) != 6:
+            return False
+        for i in l:
+            if len(i) != 2:
+                return False
+            if not match(r'[0-9a-f][0-9a-f]', i):
+                return False
+        return True
+
+    def is_ipaddr(self, ip):
+        l = ip.split('.')
+        if len(l) != 4:
+            return False
+        for i in l:
+            if not i.isdigit():
+                return False
+            elif int(i) > 255:
+                return False
+        return True
+
+    def is_ipmipass(self, userpass):
+        l = userpass.split(',')
+        if len(l) != 2:
+            return False
+        elif len(l[0]) > 8 or len(l[1]) > 8:
+            return False
+        return True
 
     def set_loader(self, mac, d, node):
         dst = Path(self.tftpboot)/'pxelinux.cfg'/('01-'+mac.replace(':', '-'))
