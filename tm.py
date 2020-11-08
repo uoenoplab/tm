@@ -32,6 +32,8 @@ class TmMsg(object):
         return 'clean command must be run by root'
     def invalid_node(node):
         return '{}: invalid node'.format(node)
+    def node_exist(node):
+        return '{}: already exist'.format(node)
     def not_reserved(node):
         return '{}: not reserved'.format(node)
     def need_owner_or_root(node):
@@ -65,14 +67,20 @@ class TmMsg(object):
         return '{}: not in /etc/dnsmasq.conf'.format(node)
     def fail2(node, cmd):
         return '{}: failed in {}'.format(node, cmd)
-    def no_db(node):
-        return '{} is not in the db'.format(node)
     def opaque(m):
         return '{}'.format(m)
     def df(d):
         return '{}'.format(d)
     def fail_restart(node):
         return '{}: failed to restart, perhaps the power is off'.format(node)
+    def bad_mac(node):
+        return '{}: invalid MAC address'.format(node)
+    def bad_ip(node):
+        return '{}: invalid IP address'.format(node)
+    def bad_ipmi_addr(node):
+        return '{}: invalid IPMI address'.format(node)
+    def bad_ipmi_pass(node):
+        return '{}: IPMI login must be USER,PASS'.format(node)
 
 class Tm(object):
     def __init__(self, argv, dbfile=DBFILE, tftpboot=TFTPBOOT, test=False):
@@ -120,7 +128,7 @@ class Tm(object):
             ans = self.get_db(node=args.node)
             if not ans:
                 if args.node:
-                    self.pr_msg(TmMsg.no_db(args.node))
+                    self.pr_msg(TmMsg.not_in_inventory(args.node))
                 else:
                     self.pr_msg(TmMsg.empty_db())
                 return
@@ -233,28 +241,41 @@ class Tm(object):
         if not hasattr(args, 'func'): # XXX
             parser.print_help()
             return
-        if args.func != 'add' and hasattr(args, 'node'):
-            if args.node and None in self.get_addrs(args.node):
-                self.pr_msg(TmMsg.invalid_node(args.node))
-                return
+        if hasattr(args, 'node'):
+            if args.node:
+                ans = self.db.get(Query().node == args.node)
+                if args.func == 'add':
+                    if ans and 'node' in ans:
+                        self.pr_msg(TmMsg.node_exist(args.node))
+                        return
+                elif None in self.get_addrs_dict(ans):
+                    self.pr_msg(TmMsg.invalid_node(args.node))
+                    return
 
-        if args.func == 'add' or args.func == 'update':
+        if args.func == 'delete':
+            if 'user' in ans:
+                self.pr_msg(TmMsg.in_use(args.node, ans['user']))
+                return
+            self.db.remove(doc_ids=[ans.doc_id,])
+            self.pr_msg(TmMsg.success(args.node, args.func))
+
+        elif args.func == 'add' or args.func == 'update':
 
             if args.mac:
                 if not self.is_mac(args.mac):
-                    self.pr_msg(TmMsg.no_mac(args.node, args.mac))
+                    self.pr_msg(TmMsg.bad_mac(args.node))
                     return
             if args.ip:
                 if not self.is_ipaddr(args.ip):
-                    self.pr_msg(TmMsg.no_mac(args.node, args.ip))
+                    self.pr_msg(TmMsg.bad_ip(args.node))
                     return
             if args.ipmiaddr:
                 if not self.is_ipaddr(args.ipmiaddr):
-                    self.pr_msg(TmMsg.no_mac(args.node, args.ipmiaddr))
+                    self.pr_msg(TmMsg.bad_ipmi_addr(args.node))
                     return
             if args.ipmipass:
                 if not self.is_ipmipass(args.ipmipass):
-                    self.pr_msg(TmMsg.no_ipmi_pass(args.node, args.ipmipass))
+                    self.pr_msg(TmMsg.bad_ipmi_pass(args.node))
                     return
 
             d = copy(vars(args))
@@ -270,7 +291,7 @@ class Tm(object):
             ans = self.get_db(node=args.node)
             if ans is None:
                 if args.node:
-                    self.pr_msg(TmMsg.no_db(args.node))
+                    self.pr_msg(TmMsg.not_in_inventory(args.node))
                 else:
                     self.pr_msg(TmMsg.empty_db())
             elif args.func == 'show':
@@ -352,14 +373,6 @@ class Tm(object):
                             break
                     else:
                         self.pr_msg(TmMsg.no_dnsmasq_conf(node['node']))
-                        return
-
-        elif args.func == 'delete':
-            r = self.db.get(Query().node == args.node)
-            if r:
-                self.db.remove(doc_ids=[r.doc_id,])
-            else:
-                self.pr_msg(TmMsg.no_db(args.node))
 
     def power(self, argv):
         parser = ArgumentParser(description="tm-power - power management",
@@ -451,9 +464,12 @@ class Tm(object):
         iaddr[3] = str(int(iaddr[3])+self.ipmi_addr_off)
         return '.'.join(iaddr)
 
+    def get_addrs_dict(self, d):
+        return (d['ip'], self.def_ipmi_addr(d['ip'])) if d else (None, None)
+
     def get_addrs(self, name):
         r = self.db.get(Query().node == name)
-        return (r['ip'], self.def_ipmi_addr(r['ip'])) if r else (None, None)
+        return get_addrs_dict(r)
 
     def is_mac(self, mac):
         l = mac.split(':')
