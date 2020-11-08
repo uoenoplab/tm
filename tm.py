@@ -469,7 +469,7 @@ class Tm(object):
 
     def get_addrs(self, name):
         r = self.db.get(Query().node == name)
-        return get_addrs_dict(r)
+        return self.get_addrs_dict(r)
 
     def is_mac(self, mac):
         l = mac.split(':')
