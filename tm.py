@@ -278,7 +278,7 @@ class Tm(object):
                     self.pr_msg(TmMsg.bad_ipmi_pass(args.node))
                     return
 
-            d = copy(vars(args))
+            d = {k:v for k, v in vars(args).items() if v is not None}
             del d['func']
             if args.func == 'update':
                 del d['node']
