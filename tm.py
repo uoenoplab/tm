@@ -21,15 +21,17 @@ DBFILE = '/usr/local/tm/tmdb.json'
 TFTPBOOT = '/var/lib/tftpboot'
 namehelp = 'hostname (e.g., n04)'
 dtfmt = '%d/%m/%y'
-MAXDAYS = 14
+MAXDAYS = 7
+KERNELVERSION = '5.8.0-25-generic'
+FSVERSION = 'focal'
 
 class TmMsg(object):
     def empty_db():
         return 'empty database'
     def not_in_inventory(node):
         return '{}: not in inventory'.format(node)
-    def non_root_clean():
-        return 'clean command must be run by root'
+    def non_root(ops):
+        return '{} command must be run by root'.format(ops)
     def invalid_node(node):
         return '{}: invalid node'.format(node)
     def node_exist(node):
@@ -90,14 +92,16 @@ class Tm(object):
         self.ipmi_addr_off = 100
         self.addrs = ('mac', 'ip', 'ipmiaddr', 'ipmipass')
         self.devices = ('disk', 'nic', 'accel')
-        self.user = getpass.getuser()
+        self.curuser = getpass.getuser()
         self.test = test
+        self.kernelversion = KERNELVERSION
+        self.fsversion = FSVERSION
 
         parser = ArgumentParser(description="tm - testbed management tool",
                 usage='tm [-h] COMMAND <args>')
         parser.add_argument('command', metavar='COMMAND',
-                choices=['inventory', 'power', 'console', 'reservation'],
-                help='{inventory|power|console}')
+                choices=['inventory', 'power', 'console', 'reservation', 'user'],
+                help='{inventory|power|console|reservation|user}')
         args = parser.parse_args(argv[1:2])
         getattr(self, args.command)(argv)
 
@@ -137,8 +141,8 @@ class Tm(object):
             return
 
         if args.func == 'clean':
-            if self.user != 'root':
-                self.pr_msg(TmMsg.non_root_clean())
+            if self.curuser != 'root':
+                self.pr_msg(TmMsg.non_root(args.func))
                 return
             today = datetime.now().date()
             ans = self.get_db()
@@ -160,15 +164,15 @@ class Tm(object):
             if 'user' in r:
                 self.pr_msg(TmMsg.in_use(args.node, r['user']))
                 return
-            elif self.user == 'root':
+            elif self.curuser == 'root':
                 self.pr_msg(TmMsg.root_reserve(args.node))
                 return
         elif args.func == 'release' or args.func == 'update':
             if not self.owner_or_root(args.node):
                 return
         elif args.func == 'clean':
-            if self.user != 'root':
-                self.pr_msg(TmMsg.non_root_clean())
+            if self.curuser != 'root':
+                self.pr_msg(TmMsg.non_root(args.func))
 
         if args.func == 'reserve' or args.func == 'update':
             try:
@@ -187,7 +191,7 @@ class Tm(object):
                     self.pr_msg(TmMsg.shrinked_date(MAXDAYS))
 
             if args.func == 'reserve':
-                if not self.set_loader(r['mac'], self.user, args.node):
+                if not self.set_loader(r['mac'], self.curuser, args.node):
                     self.pr_msg(TmMsg.symlink_fail(args.node))
                     return
 
@@ -441,6 +445,85 @@ class Tm(object):
         subprocess.call(split(cmd))
         print('\n')
 
+    def user(self, argv):
+        parser = ArgumentParser(description="tm-user - user management",
+                    usage='tm user COMMAND <user>')
+        parser.add_argument('command', metavar='COMMAND', type=str,
+        choices=['add', 'delete'],
+                help='{add|delete}')
+        parser.add_argument('user', type=str, help='user name')
+        args = parser.parse_args(argv[2:])
+
+        if not self.curuser == 'root':
+            self.pr_msg(TmMsg.non_root('user'))
+            return
+
+        run = lambda cmd: subprocess.run(split(cmd), stdout=subprocess.DEVNULL)
+
+        cmd = 'getent passwd {}'.format(args.user)
+        r = run(cmd)
+        if r.returncode != 0:
+            self.pr_msg(TmMsg.opaque('no user'))
+            return
+
+        dirs = ('loaders', 'kernels', 'initrd-imgs', 'filesystems')
+        for p in dirs:
+            d = Path(self.tftpboot)/p/args.user
+            if d.exists():
+                self.pr_msg(TmMsg.opaque('{} exists'.format(d)))
+                return
+
+        # create homes
+        for p in dirs:
+            d = Path(self.tftpboot)/p/args.user
+            for c in ('mkdir -m 755 {}'.format(d),
+                      'chown {}:{} {}'.format(args.user, args.user, d)):
+                r = run(c)
+                if r.returncode != 0:
+                    self.pr_msg(TmMsg.opaque('error in {}'.format(cmd)))
+
+        # copy loaders
+        p = Path(self.tftpboot)/'loaders'
+        c = 'cp {} {}'.format(p/'base'/'*', p/args.user)
+        r = subprocess.run(c, shell=True)
+        if r.returncode != 0:
+            self.pr_msg(TmMsg.opaque('error in {}'.format(c)))
+
+        # replace initrd-imgs, kernels and filesystem the loaders point to
+        c1 = 'for l in `ls {}` ; do sed -i "s/base/{}/g" {}/$l; done'.format(
+            p/args.user, args.user, p/args.user)
+        c2 = 'for l in `ls {}` ; do sed -i "s/ ro / rw /g" {}/$l; done'.format(
+            p/args.user, p/args.user)
+        for c in (c1, c2):
+            r = subprocess.run(c, shell=True)
+            if r.returncode != 0:
+                self.pr_msg(TmMsg.opaque('error in {}'.format(cmd)))
+
+        # copy the base initrd-img, kernel and file system
+        for o in (('initrd-imgs', 'initrd.img'), ('kernels', 'vmlinuz')):
+            p = Path(self.tftpboot)/o[0]
+            c = 'cp {} {}'.format(
+               p/'base'/'{}-{}'.format(o[1], self.kernelversion),
+               p/args.user)
+            r = run(c)
+            if r.returncode != 0:
+                self.pr_msg(TmMsg.opaque('error in {}'.format(c)))
+
+        # fix permission
+        for d in ('loaders', 'initrd-imgs', 'kernels'):
+            p = Path(self.tftpboot)/d
+            cmd = 'chown {}:{} {}'.format(args.user, args.user, p/args.user/'*')
+            subprocess.run(cmd, shell=True)
+
+        # create the file system
+        p = Path(self.tftpboot)/'filesystems'
+        cmd = 'tar xzpf {}.tar.gz -C {}'.format(
+                p/'base'/self.fsversion, p/args.user)
+        run(cmd)
+        cmd = 'chown {}:{} {}'.format(args.user, args.user,
+                p/args.user/self.fsversion)
+        run(cmd)
+
     def log(self, output):
         self.output = output
 
@@ -450,14 +533,14 @@ class Tm(object):
             self.pr_msg(TmMsg.invalid_node(node))
             return False
         elif 'user' not in r:
-            if not needuser and self.user == 'root':
+            if not needuser and self.curuser == 'root':
                 return True
             elif needuser:
                 self.pr_msg(TmMsg.not_reserved(node))
-            elif self.user != 'root':
+            elif self.curuser != 'root':
                 self.pr_msg(TmMsg.need_owner_or_root(node))
             return False
-        return True if self.user == r['user'] or self.user == 'root' else False
+        return True if self.curuser == r['user'] or self.curuser == 'root' else False
 
     def def_ipmi_addr(self, addr):
         iaddr = addr.split('.')
