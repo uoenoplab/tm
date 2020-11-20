@@ -467,6 +467,11 @@ class Tm(object):
             return
 
         dirs = ('loaders', 'kernels', 'initrd-imgs', 'filesystems')
+
+        if args.command == 'delete':
+            self.TmMsg.opaque('{} is not yet implemented'.format(args.command))
+            return
+
         for p in dirs:
             d = Path(self.tftpboot)/p/args.user
             if d.exists():
