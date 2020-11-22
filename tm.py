@@ -449,10 +449,10 @@ class Tm(object):
         parser = ArgumentParser(description="tm-user - user management",
                     usage='tm user COMMAND <user>')
         parser.add_argument('command', metavar='COMMAND', type=str,
-        choices=['add', 'delete'],
-                help='{add|delete}')
+                            choices=['add', 'delete'], help='{add|delete}')
         parser.add_argument('user', type=str, help='user name')
         args = parser.parse_args(argv[2:])
+        user = args.user
 
         if not self.curuser == 'root':
             self.pr_msg(TmMsg.non_root('user'))
@@ -460,8 +460,7 @@ class Tm(object):
 
         run = lambda cmd: subprocess.run(split(cmd), stdout=subprocess.DEVNULL)
 
-        cmd = 'getent passwd {}'.format(args.user)
-        r = run(cmd)
+        r = run('getent passwd {}'.format(user))
         if r.returncode != 0:
             self.pr_msg(TmMsg.opaque('no user'))
             return
@@ -473,24 +472,22 @@ class Tm(object):
             return
 
         for p in dirs:
-            d = Path(self.tftpboot)/p/args.user
+            d = Path(self.tftpboot)/p/user
             if d.exists():
                 self.pr_msg(TmMsg.opaque('{} exists'.format(d)))
                 return
 
         # create homes
         for p in dirs:
-            d = Path(self.tftpboot)/p/args.user
-            for c in ('mkdir -m 755 {}'.format(d),
-                      'chown {}:{} {}'.format(args.user, args.user, d)):
-                r = run(c)
-                if r.returncode != 0:
-                    self.pr_msg(TmMsg.opaque('error in {}'.format(cmd)))
-                    return
+            c = 'mkdir -m 755 {}'.format(Path(self.tftpboot)/p/user)
+            r = run(c)
+            if r.returncode != 0:
+                self.pr_msg(TmMsg.opaque('error in {}'.format(c)))
+                return
 
         # copy loaders
         p = Path(self.tftpboot)/'loaders'
-        c = 'cp {} {}'.format(p/'base'/'*', p/args.user)
+        c = 'cp {} {}'.format(p/'base'/'*', p/user)
         r = subprocess.run(c, shell=True)
         if r.returncode != 0:
             self.pr_msg(TmMsg.opaque('error in {}'.format(c)))
@@ -498,9 +495,9 @@ class Tm(object):
 
         # replace initrd-imgs, kernels and filesystem the loaders point to
         c1 = 'for l in `ls {}` ; do sed -i "s/base/{}/g" {}/$l; done'.format(
-            p/args.user, args.user, p/args.user)
+            p/user, user, p/user)
         c2 = 'for l in `ls {}` ; do sed -i "s/ ro / rw /g" {}/$l; done'.format(
-            p/args.user, p/args.user)
+            p/user, p/user)
         for c in (c1, c2):
             r = subprocess.run(c, shell=True)
             if r.returncode != 0:
@@ -510,9 +507,8 @@ class Tm(object):
         # copy the base initrd-img, kernel and file system
         for o in (('initrd-imgs', 'initrd.img'), ('kernels', 'vmlinuz')):
             p = Path(self.tftpboot)/o[0]
-            c = 'cp {} {}'.format(
-               p/'base'/'{}-{}'.format(o[1], self.kernelversion),
-               p/args.user)
+            c = 'cp {} {}'.format(p/'base'/'{}-{}'.format(o[1],
+                self.kernelversion), p/user)
             r = run(c)
             if r.returncode != 0:
                 self.pr_msg(TmMsg.opaque('error in {}'.format(c)))
@@ -521,17 +517,12 @@ class Tm(object):
         # fix permission
         for d in ('loaders', 'initrd-imgs', 'kernels'):
             p = Path(self.tftpboot)/d
-            cmd = 'chown {}:{} {}'.format(args.user, args.user, p/args.user/'*')
-            subprocess.run(cmd, shell=True)
+            run('chown -R {}:{} {}'.format(user, user, p/user))
 
         # create the file system
         p = Path(self.tftpboot)/'filesystems'
-        cmd = 'tar xzpf {}.tar.gz -C {}'.format(
-                p/'base'/self.fsversion, p/args.user)
-        run(cmd)
-        cmd = 'chown {}:{} {}'.format(args.user, args.user,
-                p/args.user/self.fsversion)
-        run(cmd)
+        run('tar xzpf {}.tar.gz -C {}'.format(p/'base'/self.fsversion, p/user))
+        run('chown {}:{} {}'.format(user, user, p/user/self.fsversion))
         self.pr_msg(TmMsg.success('user', 'add'))
 
     def log(self, output):
