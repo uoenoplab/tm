@@ -486,6 +486,7 @@ class Tm(object):
                 r = run(c)
                 if r.returncode != 0:
                     self.pr_msg(TmMsg.opaque('error in {}'.format(cmd)))
+                    return
 
         # copy loaders
         p = Path(self.tftpboot)/'loaders'
@@ -493,6 +494,7 @@ class Tm(object):
         r = subprocess.run(c, shell=True)
         if r.returncode != 0:
             self.pr_msg(TmMsg.opaque('error in {}'.format(c)))
+            return
 
         # replace initrd-imgs, kernels and filesystem the loaders point to
         c1 = 'for l in `ls {}` ; do sed -i "s/base/{}/g" {}/$l; done'.format(
@@ -503,6 +505,7 @@ class Tm(object):
             r = subprocess.run(c, shell=True)
             if r.returncode != 0:
                 self.pr_msg(TmMsg.opaque('error in {}'.format(cmd)))
+                return
 
         # copy the base initrd-img, kernel and file system
         for o in (('initrd-imgs', 'initrd.img'), ('kernels', 'vmlinuz')):
@@ -513,6 +516,7 @@ class Tm(object):
             r = run(c)
             if r.returncode != 0:
                 self.pr_msg(TmMsg.opaque('error in {}'.format(c)))
+                return
 
         # fix permission
         for d in ('loaders', 'initrd-imgs', 'kernels'):
@@ -528,6 +532,7 @@ class Tm(object):
         cmd = 'chown {}:{} {}'.format(args.user, args.user,
                 p/args.user/self.fsversion)
         run(cmd)
+        self.pr_msg(TmMsg.success('user', 'add'))
 
     def log(self, output):
         self.output = output
