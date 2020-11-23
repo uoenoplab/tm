@@ -83,6 +83,8 @@ class TmMsg(object):
         return '{}: invalid IPMI address'.format(node)
     def bad_ipmi_pass(node):
         return '{}: IPMI login must be USER,PASS'.format(node)
+    def bad_email(email):
+        return '{}: invalid email address'.format(email)
 
 class Tm(object):
     def __init__(self, argv, dbfile=DBFILE, tftpboot=TFTPBOOT, test=False):
@@ -122,6 +124,7 @@ class Tm(object):
                 p.add_argument('node', type=str, help=namehelp)
             if cmd == 'reserve' or cmd == 'update':
                 p.add_argument('expire', type=str, help='ddmmyy')
+                p.add_argument('email', type=str, help='email address')
             p.set_defaults(func=cmd)
         args = parser.parse_args(argv[2:])
         if not hasattr(args, 'func'): # XXX
@@ -137,7 +140,7 @@ class Tm(object):
                     self.pr_msg(TmMsg.empty_db())
                 return
             self.pr_msg(DataFrame.from_dict(ans).reindex(
-                columns=('node', 'user', 'expire')))
+                columns=('node', 'user', 'expire', 'email')))
             return
 
         if args.func == 'clean':
@@ -175,6 +178,11 @@ class Tm(object):
                 self.pr_msg(TmMsg.non_root(args.func))
 
         if args.func == 'reserve' or args.func == 'update':
+            rc = re.compile(r"^[A-Za-z0-9\.\+_-]+@[A-Za-z0-9\._-]+\.[a-zA-Z]*$")
+            if not re.match(rc, args.email):
+                self.pr_msg(TmMsg.bad_email(args.email))
+                return
+
             try:
                 dt = datetime.strptime(args.expire, dtfmt).date()
             except(ValueError):
@@ -196,7 +204,8 @@ class Tm(object):
                     return
 
             self.db.update({'user': getpass.getuser(),
-                'expire': dt.strftime(dtfmt)}, Query().node == args.node)
+                'expire': dt.strftime(dtfmt), 'email': args.email},
+                Query().node == args.node)
         else:
             if not self.test:
                 self.power(split('tm power poweroff {}'.format(args.node)))
