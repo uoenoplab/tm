@@ -165,18 +165,19 @@ def test_reservation(test_inventory, tmp_path):
     tfb = tmp_path/tftpboot
     testTm = lambda args : Tm(args, dbfile=dbf, tftpboot=tfb, test=True)
 
+    email = 'abc@example.com'
     now = datetime.now().date()
     times = []
     for days in (-1, 1, 10):
         times.append(datetime.strftime(now + timedelta(days=days), '%d/%m/%y'))
 
-    rsv_cmd = 'tm reservation {} {} {}'
+    rsv_cmd = 'tm reservation {} {} {} {}'
 
-    cmd = TmCmd(rsv_cmd.format('reserve', n1, times[0]), node=n1)
+    cmd = TmCmd(rsv_cmd.format('reserve', n1, times[0], email), node=n1)
     out = testTm(cmd.getcmd()).output
     assert out == TmMsg.invalid_date()
 
-    cmd = TmCmd(rsv_cmd.format('reserve', n1, times[1]), node=n1)
+    cmd = TmCmd(rsv_cmd.format('reserve', n1, times[1], email), node=n1)
     out = testTm(cmd.getcmd()).output
     assert out == TmMsg.success(cmd.getnode(), cmd.getsub())
 
@@ -185,15 +186,15 @@ def test_reservation(test_inventory, tmp_path):
     dst = tfb/'pxelinux.cfg'/'01-00-af-3f-cf-2b-12'
     assert dst.samefile(src)
 
-    cmd = TmCmd(rsv_cmd.format('reserve', n1, times[1]), node=n1)
+    cmd = TmCmd(rsv_cmd.format('reserve', n1, times[1], email), node=n1)
     out = testTm(cmd.getcmd()).output
     assert out == TmMsg.in_use(cmd.getnode(), getpass.getuser())
 
-    cmd = TmCmd(rsv_cmd.format('update', n1, times[2]), node=n1)
+    cmd = TmCmd(rsv_cmd.format('update', n1, times[2], ''), node=n1)
     out = testTm(cmd.getcmd()).output
     assert out == TmMsg.success(cmd.getnode(), cmd.getsub())
 
-    cmd = TmCmd(rsv_cmd.format('release', n1, ''), node=n1)
+    cmd = TmCmd(rsv_cmd.format('release', n1, '', ''), node=n1)
     out = testTm(cmd.getcmd()).output
     assert out == TmMsg.success(cmd.getnode(), cmd.getsub())
 

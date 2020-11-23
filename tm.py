@@ -15,7 +15,7 @@ from pandas import DataFrame
 from datetime import datetime, timedelta
 import getpass
 from pathlib import Path
-from re import match
+from re import match, compile
 
 DBFILE = '/usr/local/tm/tmdb.json'
 TFTPBOOT = '/var/lib/tftpboot'
@@ -124,7 +124,8 @@ class Tm(object):
                 p.add_argument('node', type=str, help=namehelp)
             if cmd == 'reserve' or cmd == 'update':
                 p.add_argument('expire', type=str, help='ddmmyy')
-                p.add_argument('email', type=str, help='email address')
+                if cmd == 'reserve':
+                    p.add_argument('email', type=str, help='email address')
             p.set_defaults(func=cmd)
         args = parser.parse_args(argv[2:])
         if not hasattr(args, 'func'): # XXX
@@ -142,8 +143,7 @@ class Tm(object):
             self.pr_msg(DataFrame.from_dict(ans).reindex(
                 columns=('node', 'user', 'expire', 'email')))
             return
-
-        if args.func == 'clean':
+        elif args.func == 'clean':
             if self.curuser != 'root':
                 self.pr_msg(TmMsg.non_root(args.func))
                 return
@@ -173,16 +173,14 @@ class Tm(object):
         elif args.func == 'release' or args.func == 'update':
             if not self.owner_or_root(args.node):
                 return
-        elif args.func == 'clean':
-            if self.curuser != 'root':
-                self.pr_msg(TmMsg.non_root(args.func))
 
         if args.func == 'reserve' or args.func == 'update':
-            rc = re.compile(r"^[A-Za-z0-9\.\+_-]+@[A-Za-z0-9\._-]+\.[a-zA-Z]*$")
-            if not re.match(rc, args.email):
-                self.pr_msg(TmMsg.bad_email(args.email))
-                return
-
+            if args.func == 'reserve':
+                rc = compile(
+                        r"^[A-Za-z0-9\.\+_-]+@[A-Za-z0-9\._-]+\.[a-zA-Z]*$")
+                if not match(rc, args.email):
+                    self.pr_msg(TmMsg.bad_email(args.email))
+                    return
             try:
                 dt = datetime.strptime(args.expire, dtfmt).date()
             except(ValueError):
@@ -198,14 +196,13 @@ class Tm(object):
                     dt = latest
                     self.pr_msg(TmMsg.shrinked_date(MAXDAYS))
 
+            d = {'user':getpass.getuser(), 'expire': dt.strftime(dtfmt)}
             if args.func == 'reserve':
                 if not self.set_loader(r['mac'], self.curuser, args.node):
                     self.pr_msg(TmMsg.symlink_fail(args.node))
                     return
-
-            self.db.update({'user': getpass.getuser(),
-                'expire': dt.strftime(dtfmt), 'email': args.email},
-                Query().node == args.node)
+                d['email'] = args.email
+            self.db.update(d, Query().node == args.node)
         else:
             if not self.test:
                 self.power(split('tm power poweroff {}'.format(args.node)))

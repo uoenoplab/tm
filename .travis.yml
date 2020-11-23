@@ -14,4 +14,4 @@ install:
     - touch test_tftpboot/loaders/`whoami`/n03
     - touch test_tmdb.json
 script: 
-    - pytest tests
+    - pytest tests/test_all.py
