@@ -149,7 +149,7 @@ class Tm(object):
             else:
                 p.add_argument('node', type=str, help=namehelp)
             if cmd == 'reserve' or cmd == 'update':
-                p.add_argument('expire', type=str, help='ddmmyy')
+                p.add_argument('expire', type=str, help='dd/mm/yy')
                 if cmd == 'reserve':
                     p.add_argument('email', type=str, help='email address')
             p.set_defaults(func=cmd)
@@ -201,17 +201,17 @@ class Tm(object):
                 return
 
         if args.func == 'reserve' or args.func == 'update':
+            try:
+                dt = datetime.strptime(args.expire, dtfmt).date()
+            except(ValueError):
+                self.pr_msg(TmMsg.invalid_date_format())
+                return
             if args.func == 'reserve':
                 rc = compile(
                         r"^[A-Za-z0-9\.\+_-]+@[A-Za-z0-9\._-]+\.[a-zA-Z]*$")
                 if not match(rc, args.email):
                     self.pr_msg(TmMsg.bad_email(args.email))
                     return
-            try:
-                dt = datetime.strptime(args.expire, dtfmt).date()
-            except(ValueError):
-                self.pr_msg(TmMsg.invalid_date_format())
-                return
             today = datetime.now().date()
             if dt < today:
                 self.pr_msg(TmMsg.invalid_date())
@@ -632,7 +632,7 @@ class Tm(object):
     def reset_node(self, node, mac):
         if not self.set_loader(mac, 'base', node):
             self.pr_msg(TmMsg.restore_fail(node, mac))
-        for e in ['user', 'expire']:
+        for e in ['user', 'expire', 'email']:
             self.db.update(delete(e), Query().node == node)
 
     def get_db(self, node=None):
