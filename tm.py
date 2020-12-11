@@ -140,18 +140,24 @@ class Tm(object):
         cmds = ('reserve', 'update', 'release', 'show', 'clean')
         for cmd in cmds:
             p = subparsers.add_parser(cmd,
-                    usage='tm reservation {} <args>'.format(cmd))
+                    usage='tm reservation {}'.format(cmd))
             if cmd == 'show':
                 p.add_argument('--node', type=str, help=namehelp)
+                p.usage += ' {}'.format('[--node NODE]')
             elif cmd == 'clean':
                 p.add_argument('--noexpire', action='store_true',
                         help='release nodes regardless of expiration')
+                p.usage += ' {}'.format('[--noexpire]')
             else:
                 p.add_argument('node', type=str, help=namehelp)
+                p.usage += ' {}'.format('<node>')
             if cmd == 'reserve' or cmd == 'update':
                 p.add_argument('expire', type=str, help='dd/mm/yy')
+                p.usage += ' {}'.format('<expire>')
                 if cmd == 'reserve':
                     p.add_argument('email', type=str, help='email address')
+                    p.usage += ' {}'.format('<email>')
+            p.usage += ' {}'.format('[-h|--help]')
             p.set_defaults(func=cmd)
         args = parser.parse_args(argv[2:])
         if not hasattr(args, 'func'): # XXX
