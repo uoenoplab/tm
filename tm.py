@@ -120,6 +120,7 @@ class Tm(object):
         self.ipmi_addr_off = 100
         self.addrs = ('mac', 'ip', 'ipmiaddr', 'ipmipass')
         self.devices = ('disk', 'nic', 'accel')
+        self.reservations = ('user', 'expire', 'email')
         self.curuser = getpass.getuser()
         self.test = test
         self.kernelversion = KERNELVERSION
@@ -255,6 +256,8 @@ class Tm(object):
                         help='management addresses') 
                 p.add_argument('--devices', action='store_true',
                         help='I/O peripherals') 
+                p.add_argument('--reservations', action='store_true',
+                        help='reservations') 
             p.set_defaults(func=cmd)
         delete = subparsers.add_parser('delete')
         delete.add_argument('node', type=str, help=namehelp)
@@ -344,7 +347,7 @@ class Tm(object):
                     cls.remove(r)
                     cls.insert(i, r)
                 if args.func == 'show':
-                    for a in ('addrs', 'devices'):
+                    for a in ('addrs', 'devices', 'reservations'):
                         if not getattr(args, a):
                             cls = [c for c in cls if c not in getattr(self, a)]
                 self.pr_msg(df.reindex(columns=cls))
