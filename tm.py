@@ -266,7 +266,8 @@ class Tm(object):
         t = True
         f = False
         for cmd in ('add', 'update'):
-            p = subparsers.add_parser(cmd)
+            p = subparsers.add_parser(cmd,
+                    usage='tm inventory {} [<args>] <node>'.format(cmd))
             lm = lambda o, t, r, h: p.add_argument(o, type=t, required=r, help=h)
             lm('--mac', str, t, 'MAC addr (e.g., 00:00:00:00:00:00)')
             lm('--ip', str, t, 'IPv4 addr (e.g., 192.168.0.2)')
@@ -455,7 +456,7 @@ class Tm(object):
                     try:
                         r = ipmi.chassis_control_power_cycle()
                     except(pyipmi.errors.CompletionCodeError):
-                        self.pr_msg(TmMsg.fail_restart(args.node, args.command))
+                        self.pr_msg(TmMsg.fail_restart(args.node))
 
                 break
             except(RuntimeError):

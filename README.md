@@ -21,7 +21,7 @@ sudo cp tm-cleanup.* /usr/lib/systemd/system/
 ```
 sudo systemctl enable tm-cleanup.timer
 sudo systemctl start tm-cleanup.timer
-systemctl start list-timers
+sudo systemctl list-timers
 ```
 In the UNIT and ACTIVATES rows, tm-cleanup.timer and tm-cleanup.service should
 appear, respectively.
