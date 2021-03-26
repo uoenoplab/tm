@@ -442,25 +442,24 @@ class Tm(object):
         ipmi.session.set_session_type_rmcp(addr)
         ipmi.session.establish()
         r = None
-        # Dell and Supermicro default user/pass
-        for u, p in [('root', 'calvin'), ('ADMIN', 'ADMIN')]:
-            ipmi.session.set_auth_type_user(u, p)
-            try:
-                if args.command == 'status':
-                    r = ipmi.get_chassis_status()
-                elif args.command == 'poweroff':
-                    r = ipmi.chassis_control_power_down()
-                elif args.command == 'poweron':
-                    r = ipmi.chassis_control_power_up()
-                elif args.command == 'restart':
-                    try:
-                        r = ipmi.chassis_control_power_cycle()
-                    except(pyipmi.errors.CompletionCodeError):
-                        self.pr_msg(TmMsg.fail_restart(args.node))
 
-                break
-            except(RuntimeError):
-                pass
+        # Dell and Supermicro default user/pass
+        userpass = self.get_ipmi_cred(args.node)
+        ipmi.session.set_auth_type_user(userpass[0], userpass[1])
+        try:
+            if args.command == 'status':
+                r = ipmi.get_chassis_status()
+            elif args.command == 'poweroff':
+                r = ipmi.chassis_control_power_down()
+            elif args.command == 'poweron':
+                r = ipmi.chassis_control_power_up()
+            elif args.command == 'restart':
+                try:
+                    r = ipmi.chassis_control_power_cycle()
+                except(pyipmi.errors.CompletionCodeError):
+                    self.pr_msg(TmMsg.fail_restart(args.node))
+        except(RuntimeError):
+            pass
         ipmi.session.close()
         if r:
             self.pr_msg(TmMsg.opaque('poweron' if r.__dict__['power_on']
@@ -479,8 +478,7 @@ class Tm(object):
             self.pr_msg(TmMsg.invalid_node(args.node))
             return
 
-        r = self.db.get(Query().node == args.node)
-        userpass = r['ipmipass'].split(',')
+        userpass = self.get_ipmi_cred(args.node)
         cmd = 'ipmitool -I lanplus -H {} -U {} -P {} sol activate'.format(
                 addrs[1], userpass[0], userpass[1])
         subprocess.call(split(cmd))
@@ -651,6 +649,10 @@ class Tm(object):
             return None if res[0] is None else res
         res = self.db.all()
         return None if len(res) == 0 else res
+
+    def get_ipmi_cred(self, node):
+        r = self.db.get(Query().node == node)
+        return r['ipmipass'].split(',')
 
     def pr_msg(self, msg):
         self.output = msg
