@@ -45,6 +45,10 @@ from re import match, compile
 
 DBFILE = '/usr/local/tm/tmdb.json'
 TFTPBOOT = '/var/lib/tftpboot'
+DHCPBOOT = str(Path(TFTPBOOT)/'machines')
+LINUX_BOOT = 'pxelinux.0'
+FREEBSD_BOOT = 'pxeboot'
+PXEDIR = 'pxelinux.cfg'
 namehelp = 'hostname (e.g., n04)'
 dtfmt = '%d/%m/%y'
 MAXDAYS = 7
@@ -113,9 +117,15 @@ class TmMsg(object):
         return '{}: invalid email address'.format(email)
 
 class Tm(object):
-    def __init__(self, argv, dbfile=DBFILE, tftpboot=TFTPBOOT, test=False):
+    def __init__(self, argv, dbfile=DBFILE, tftpboot=TFTPBOOT, pxedir=PXEDIR,
+            dhcpboot=DHCPBOOT, linux_boot=LINUX_BOOT, freebsd_boot=FREEBSD_BOOT,
+            test=False):
         self.output = ''
         self.tftpboot = tftpboot
+        self.dhcpboot = dhcpboot
+        self.pxedir = pxedir
+        self.linux_boot = linux_boot
+        self.freebsd_boot = freebsd_boot
         self.db = TinyDB(dbfile)
         self.ipmi_addr_off = 100
         self.addrs = ('mac', 'ip', 'ipmiaddr', 'ipmipass')
@@ -231,6 +241,9 @@ class Tm(object):
 
             d = {'user':getpass.getuser(), 'expire': dt.strftime(dtfmt)}
             if args.func == 'reserve':
+                if not self.reset_boot(args.node):
+                    self.pr_msg(TmMsg.symlink_fail(args.node))
+                    return
                 if not self.set_loader(r['mac'], self.curuser, args.node):
                     self.pr_msg(TmMsg.symlink_fail(args.node))
                     return
@@ -382,7 +395,7 @@ class Tm(object):
                         print(msg.format(node['ipmiaddr'], 'unreachable'))
 
                     # test loader
-                    loaderpath = Path(self.tftpboot)/'pxelinux.cfg'
+                    loaderpath = Path(self.dhcpboot)/self.pxedir
                     cmd = 'ls {}'.format(loaderpath)
                     msg = node['node'] + ': loader {} {} in ' + str(loaderpath)
                     try:
@@ -621,23 +634,29 @@ class Tm(object):
             return False
         return True
 
-    def set_loader(self, mac, d, node):
-        dst = Path(self.tftpboot)/'pxelinux.cfg'/('01-'+mac.replace(':', '-'))
-        # Unset existing one
+    def set_loader(self, mac, u, node):
+        d = Path(self.dhcpboot)/Path(self.pxedir)/('01-'+mac.replace(':', '-'))
+        s = Path('../')/'loaders'/u/node
+        return self.set_link(s, d)
+
+    def set_link(self, src, dst):
         try:
             dst.unlink()
         except:
-            print('{}: cannot remove the link {}'.format(node, dst))
-        # set new one
-        src = Path('../')/'loaders'/d/node
+            print('cannot remove the link {}'.format(dst))
         try:
             dst.symlink_to(src)
             return True
         except:
-            print('{}: failed to link to'.format(node, src))
+            print('failed to link to'.format(src))
             return False
 
+    def reset_boot(self, node):
+        return self.set_link(self.linux_boot, Path(self.dhcpboot)/node)
+
     def reset_node(self, node, mac):
+        # reset to Linux
+        self.reset_boot(node)
         if not self.set_loader(mac, 'base', node):
             self.pr_msg(TmMsg.restore_fail(node, mac))
         for e in ['user', 'expire', 'email']:
