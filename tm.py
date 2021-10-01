@@ -285,7 +285,7 @@ class Tm(object):
             lm('--mac', str, t, 'MAC addr (e.g., 00:00:00:00:00:00)')
             lm('--ip', str, t, 'IPv4 addr (e.g., 192.168.0.2)')
             lm('--ipmipass', str, t, 'IPMI user,pass (e.g., ADMIN,ADMIN)')
-            lm('--cpu', str, t, 'CPU (e.g., Intel Xeon E3-1220v3)')
+            lm('--cpu', str, t, 'CPU (e.g., Xeon E3-1220v3)')
             lm('--ram', int, t, 'RAM in GB (e.g., 64)')
             lm('--nic', str, t, '(non-boot) NIC (e.g., Intel X520-SR2)')
             lm('--disk', str, f, 'Disk (e.g., Samsung Evo 870 256GB)')
