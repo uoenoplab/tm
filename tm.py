@@ -520,7 +520,22 @@ class Tm(object):
         dirs = ('loaders', 'kernels', 'initrd-imgs', 'filesystems')
 
         if args.command == 'delete':
-            self.TmMsg.opaque('{} is not yet implemented'.format(args.command))
+            # ensure no reservation
+            ans = self.get_db_from_user(user)
+            if ans:
+                self.pr_msg(TmMsg.opaque('{} still reserves {}'.format(user,
+                    ', '.join([d['node'] for d in ans]))))
+                return
+            # ensure current proper existence
+            for p in dirs:
+                d = Path(self.tftpboot)/p/user
+                if not d.exists():
+                    self.pr_msg(TmMsg.opaque('{} is missing'.format(d)))
+                    return
+            cmdstr = 'rm -rf'
+            for p in dirs:
+                cmdstr += ' ' + str(Path(self.tftpboot)/p/user)
+            self.pr_msg(TmMsg.opaque('ready for: sudo {}'.format(cmdstr)))
             return
 
         for p in dirs:
@@ -661,6 +676,10 @@ class Tm(object):
             self.pr_msg(TmMsg.restore_fail(node, mac))
         for e in ['user', 'expire', 'email']:
             self.db.update(delete(e), Query().node == node)
+
+    def get_db_from_user(self, user):
+        res = [self.db.get(Query().user == user)]
+        return None if res[0] is None else res
 
     def get_db(self, node=None):
         if node:
