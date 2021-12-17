@@ -64,57 +64,16 @@ class TmMsg(object):
         return '{} command must be run by root'.format(ops)
     def invalid_node(node):
         return '{}: invalid node'.format(node)
-    def node_exist(node):
-        return '{}: already exist'.format(node)
-    def not_reserved(node):
-        return '{}: not reserved'.format(node)
-    def need_owner_or_root(node):
-        return '{}: need reservation or to be root'.format(node)
     def in_use(node, user):
         return '{}: in use by {}'.format(node, user)
-    def root_reserve():
-        return 'root cannot reserve nodes'
-    def invalid_date_format():
-        return 'date format must be dd/mm/yy'
-    def invalid_date():
-        return  'date must be on or later than today'
-    def shrinked_date(days):
-        return 'set {} days of the maximum duration'.format(days)
     def symlink_fail(node):
         return '{}: failed to create symlink'.format(node)
-    def restore_fail(node, mac):
-        return '{}: cannot restore symlink for {}'.format(node, mac)
     def success(node, ops):
         return '{}: {} success'.format(node, ops)
-    def no_host(node):
-        return '{}: no network name - check system configuration'.format(node)
-    def non_default_ipmi(node, addr, def_addr):
-        return '{}: ipmi addr {} differs from the defaule one {}'.format(
-                node, addr, def_addr)
-    def reachable(node):
-        return 'reachable'
-    def unreachable(node):
-        return 'unreachable'
-    def no_dnsmasq_conf(node):
-        return '{}: not in /etc/dnsmasq.conf'.format(node)
-    def fail2(node, cmd):
+    def fail(node, cmd):
         return '{}: failed in {}'.format(node, cmd)
-    def opaque(m):
-        return '{}'.format(m)
     def df(d):
         return '{}'.format(d)
-    def fail_restart(node):
-        return '{}: failed to restart, perhaps the power is off'.format(node)
-    def bad_mac(node):
-        return '{}: invalid MAC address'.format(node)
-    def bad_ip(node):
-        return '{}: invalid IP address'.format(node)
-    def bad_ipmi_addr(node):
-        return '{}: invalid IPMI address'.format(node)
-    def bad_ipmi_pass(node):
-        return '{}: IPMI login must be USER,PASS'.format(node)
-    def bad_email(email):
-        return '{}: invalid email address'.format(email)
 
 class Tm(object):
     def __init__(self, argv, dbfile=DBFILE, tftpboot=TFTPBOOT, pxedir=PXEDIR,
@@ -211,7 +170,7 @@ class Tm(object):
                 self.pr_msg(TmMsg.in_use(args.node, r['user']))
                 return
             elif self.curuser == 'root':
-                self.pr_msg(TmMsg.root_reserve(args.node))
+                self.pr_msg('root cannot reserve nodes')
                 return
         elif args.func == 'release' or args.func == 'update':
             if not self.owner_or_root(args.node):
@@ -221,23 +180,23 @@ class Tm(object):
             try:
                 dt = datetime.strptime(args.expire, dtfmt).date()
             except(ValueError):
-                self.pr_msg(TmMsg.invalid_date_format())
+                self.pr_msg('date format must be dd/mm/yy')
                 return
             if args.func == 'reserve':
                 rc = compile(
                         r"^[A-Za-z0-9\.\+_-]+@[A-Za-z0-9\._-]+\.[a-zA-Z]*$")
                 if not match(rc, args.email):
-                    self.pr_msg(TmMsg.bad_email(args.email))
+                    self.pr_msg('{}: invalid email address'.format(args.email))
                     return
             today = datetime.now().date()
             if dt < today:
-                self.pr_msg(TmMsg.invalid_date())
+                self.pr_msg('date must be on or later than today')
                 return
             else:
                 latest = (datetime.now() + timedelta(days=MAXDAYS)).date()
                 if dt > latest:
                     dt = latest
-                    self.pr_msg(TmMsg.shrinked_date(MAXDAYS))
+                    self.pr_msg('set {} days of of the maximum duration'.format(MAXDAYS))
 
             d = {'user':getpass.getuser(), 'expire': dt.strftime(dtfmt)}
             if args.func == 'reserve':
@@ -305,7 +264,7 @@ class Tm(object):
                 ans = self.db.get(Query().node == args.node)
                 if args.func == 'add':
                     if ans and 'node' in ans:
-                        self.pr_msg(TmMsg.node_exist(args.node))
+                        self.pr_msg('{}: already exist'.format(args.node))
                         return
                 elif None in self.get_addrs_dict(ans):
                     self.pr_msg(TmMsg.invalid_node(args.node))
@@ -322,19 +281,20 @@ class Tm(object):
 
             if args.mac:
                 if not self.is_mac(args.mac):
-                    self.pr_msg(TmMsg.bad_mac(args.node))
+                    self.pr_msg('{}: invalid MAC address'.format(args.node))
                     return
             if args.ip:
                 if not self.is_ipaddr(args.ip):
-                    self.pr_msg(TmMsg.bad_ip(args.node))
+                    self.pr_msg('{}: invalid IP address'.format(args.node))
                     return
             if args.ipmiaddr:
                 if not self.is_ipaddr(args.ipmiaddr):
-                    self.pr_msg(TmMsg.bad_ipmi_addr(args.node))
+                    self.pr_msg('{}: invalid IPMI address'.format(args.node))
                     return
             if args.ipmipass:
                 if not self.is_ipmipass(args.ipmipass):
-                    self.pr_msg(TmMsg.bad_ipmi_pass(args.node))
+                    self.pr_msg('{}: IPMI login must be USER,PASS'.format(
+                        args.node))
                     return
 
             d = {k:v for k, v in vars(args).items() if v is not None}
@@ -371,7 +331,7 @@ class Tm(object):
                     try:
                         addr = socket.gethostbyname(node['node'])
                     except(socket.gaierror):
-                        self.pr_msg(TmMsg.no_host(node['node']))
+                        self.pr_msg('{}: no network name'.format(node['node']))
                         return
 
                     # compare with those registered to inventory
@@ -381,7 +341,7 @@ class Tm(object):
                     print(msg.format(addr, m, node['ip']))
 
                     if self.def_ipmi_addr(addr) != node['ipmiaddr']:
-                        self.pr_msg(TmMsg.non_default_ipmi(
+                        self.pr_msg('{}: ipmi addr {} differs from the default one {}'.format(
                             self.def_ipmi_addr(addr), node['ipmiaddr']))
 
                     # test ipmi
@@ -401,7 +361,7 @@ class Tm(object):
                     try:
                         res = subprocess.check_output(split(cmd))
                     except(subprocess.CalledProcessError) as e:
-                        self.pr_msg(TmMsg.fail2(node['node'], cmd))
+                        self.pr_msg(TmMsg.fail(node['node'], cmd))
                         return
                     files = []
                     for f in res.decode().split('\n')[0:-1]:
@@ -415,7 +375,7 @@ class Tm(object):
                     try:
                         res = subprocess.getoutput(cmd)
                     except(subprocess.CalledProcessError):
-                        self.pr_msg(TmMsg.fail2(node['node'], cmd))
+                        self.pr_msg(TmMsg.fail(node['node'], cmd))
                     for line in res.split('\n'):
                         mac, ip, name = line.split(',')
                         if node['node'] == name:
@@ -430,7 +390,7 @@ class Tm(object):
                                 print(m.format(name, node['ip'], ip))
                             break
                     else:
-                        self.pr_msg(TmMsg.no_dnsmasq_conf(node['node']))
+                        self.pr_msg('{}: not in /etc/dnsmasq.conf'.format(node['node']))
 
     def power(self, argv):
         parser = ArgumentParser(description="tm-power - power management",
@@ -470,13 +430,13 @@ class Tm(object):
                 try:
                     r = ipmi.chassis_control_power_cycle()
                 except(pyipmi.errors.CompletionCodeError):
-                    self.pr_msg(TmMsg.fail_restart(args.node))
+                    self.pr_msg('{}: cannot restart, power might be off'.format(
+                        args.node))
         except(RuntimeError):
             pass
         ipmi.session.close()
         if r:
-            self.pr_msg(TmMsg.opaque('poweron' if r.__dict__['power_on']
-                else 'poweroff'))
+            self.pr_msg('poweron' if r.__dict__['power_on'] else 'poweroff')
 
     def console(self, argv):
         parser = ArgumentParser(description="tm-console - access console.",
@@ -514,7 +474,7 @@ class Tm(object):
 
         r = run('getent passwd {}'.format(user))
         if r.returncode != 0:
-            self.pr_msg(TmMsg.opaque('no user'))
+            self.pr_msg('no user')
             return
 
         dirs = ('loaders', 'kernels', 'initrd-imgs', 'filesystems')
@@ -523,25 +483,25 @@ class Tm(object):
             # ensure no reservation
             ans = self.get_db_from_user(user)
             if ans:
-                self.pr_msg(TmMsg.opaque('{} still reserves {}'.format(user,
-                    ', '.join([d['node'] for d in ans]))))
+                self.pr_msg('{} still reserves {}'.format(user,
+                    ', '.join([d['node'] for d in ans])))
                 return
             # ensure current proper existence
             for p in dirs:
                 d = Path(self.tftpboot)/p/user
                 if not d.exists():
-                    self.pr_msg(TmMsg.opaque('{} is missing'.format(d)))
+                    self.pr_msg('{} is missing'.format(d))
                     return
             cmdstr = 'rm -rf'
             for p in dirs:
                 cmdstr += ' ' + str(Path(self.tftpboot)/p/user)
-            self.pr_msg(TmMsg.opaque('run: sudo {}'.format(cmdstr)))
+            self.pr_msg('run: sudo {}'.format(cmdstr))
             return
 
         for p in dirs:
             d = Path(self.tftpboot)/p/user
             if d.exists():
-                self.pr_msg(TmMsg.opaque('{} exists'.format(d)))
+                self.pr_msg('{} exists'.format(d))
                 return
 
         # create homes
@@ -549,7 +509,7 @@ class Tm(object):
             c = 'mkdir -m 755 {}'.format(Path(self.tftpboot)/p/user)
             r = run(c)
             if r.returncode != 0:
-                self.pr_msg(TmMsg.opaque('error in {}'.format(c)))
+                self.pr_msg('error in {}'.format(c))
                 return
 
         # copy loaders
@@ -557,7 +517,7 @@ class Tm(object):
         c = 'cp {} {}'.format(p/'base'/'*', p/user)
         r = subprocess.run(c, shell=True)
         if r.returncode != 0:
-            self.pr_msg(TmMsg.opaque('error in {}'.format(c)))
+            self.pr_msg('error in {}'.format(c))
             return
 
         # replace initrd-imgs, kernels and filesystem the loaders point to
@@ -568,7 +528,7 @@ class Tm(object):
         for c in (c1, c2):
             r = subprocess.run(c, shell=True)
             if r.returncode != 0:
-                self.pr_msg(TmMsg.opaque('error in {}'.format(cmd)))
+                self.pr_msg('error in {}'.format(cmd))
                 return
 
         # copy the base initrd-img, kernel and file system
@@ -578,7 +538,7 @@ class Tm(object):
                 self.kernelversion), p/user)
             r = run(c)
             if r.returncode != 0:
-                self.pr_msg(TmMsg.opaque('error in {}'.format(c)))
+                self.pr_msg('error in {}'.format(c))
                 return
 
         # fix permission
@@ -601,9 +561,9 @@ class Tm(object):
             if not needuser and self.curuser == 'root':
                 return True
             elif needuser:
-                self.pr_msg(TmMsg.not_reserved(node))
+                self.pr_msg('{}: not reserved'.format(node))
             elif self.curuser != 'root':
-                self.pr_msg(TmMsg.need_owner_or_root(node))
+                self.pr_msg('{}: need reservation or to be root'.format(node))
             return False
         return True if self.curuser == r['user'] or self.curuser == 'root' else False
 
@@ -673,7 +633,7 @@ class Tm(object):
         # reset to Linux
         self.reset_boot(node)
         if not self.set_loader(mac, 'base', node):
-            self.pr_msg(TmMsg.restore_fail(node, mac))
+            self.pr_msg('{}: cannot restore symlink for {}'.format(node, mac))
         for e in ['user', 'expire', 'email']:
             self.db.update(delete(e), Query().node == node)
 
