@@ -535,7 +535,7 @@ class Tm(object):
             cmdstr = 'rm -rf'
             for p in dirs:
                 cmdstr += ' ' + str(Path(self.tftpboot)/p/user)
-            self.pr_msg(TmMsg.opaque('ready for: sudo {}'.format(cmdstr)))
+            self.pr_msg(TmMsg.opaque('run: sudo {}'.format(cmdstr)))
             return
 
         for p in dirs:
