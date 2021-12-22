@@ -107,8 +107,7 @@ class Tm(object):
         parser = ArgumentParser(description="tm-reservation - node reservation",
                 usage='tm reservation COMMAND [<args>]')
         subparsers = parser.add_subparsers(title='COMMAND')
-        cmds = ('reserve', 'update', 'release', 'show', 'clean')
-        for cmd in cmds:
+        for cmd in ('reserve', 'update', 'release', 'show', 'clean'):
             p = subparsers.add_parser(cmd,
                     usage='tm reservation {}'.format(cmd))
             if cmd == 'show':
@@ -142,8 +141,10 @@ class Tm(object):
                 else:
                     self.pr_msg(TmMsg.empty_db())
                 return
-            self.pr_msg(DataFrame.from_dict(ans).reindex(
-                columns=('node', 'user', 'expire', 'email')))
+            df = DataFrame.from_dict(ans)
+            df.sort_values(by=['node'], inplace=True)
+            df.reset_index(drop=True, inplace=True)
+            self.pr_msg(df.reindex(columns=('node', 'user', 'expire', 'email')))
             return
         elif args.func == 'clean':
             if self.curuser != 'root':
@@ -157,7 +158,8 @@ class Tm(object):
                 if (args.noexpire or
                     today > datetime.strptime(v['expire'], dtfmt).date()):
                     if not self.test:
-                        self.power(split('tm power poweroff {}'.format(v['node'])))
+                        self.power(
+                            split('tm power poweroff {}'.format(v['node'])))
                     self.reset_node(v['node'], v['mac'])
             return
 
@@ -315,6 +317,8 @@ class Tm(object):
                     self.pr_msg(TmMsg.empty_db())
             elif args.func == 'show':
                 df = DataFrame.from_dict(ans)
+                df.sort_values(by=['node'], inplace=True)
+                df.reset_index(drop=True, inplace=True)
                 cls = list(df.columns)
                 reorders = ('node', 'mac', 'ip', 'ipmiaddr')
                 for i, r in enumerate(reorders):
