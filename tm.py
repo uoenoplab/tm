@@ -29,6 +29,7 @@
 
 from argparse import ArgumentParser
 import sys
+import os
 import pyipmi
 import pyipmi.interfaces
 import socket
@@ -41,11 +42,12 @@ from pandas import DataFrame
 from datetime import datetime, timedelta
 import getpass
 from pathlib import Path
-from re import match, compile
+from re import match, compile, search
 
 DBFILE = '/usr/local/tm/tmdb.json'
 TFTPBOOT = '/var/lib/tftpboot'
 DHCPBOOT = str(Path(TFTPBOOT)/'machines')
+FILESYSTEMS = '/opt/nfs/filesystems'
 LINUX_BOOT = 'pxelinux.0'
 FREEBSD_BOOT = 'pxeboot'
 PXEDIR = 'pxelinux.cfg'
@@ -78,11 +80,12 @@ class TmMsg(object):
 class Tm(object):
     def __init__(self, argv, dbfile=DBFILE, tftpboot=TFTPBOOT, pxedir=PXEDIR,
             dhcpboot=DHCPBOOT, linux_boot=LINUX_BOOT, freebsd_boot=FREEBSD_BOOT,
-            test=False):
+            filesystems=FILESYSTEMS, test=False):
         self.output = ''
         self.tftpboot = tftpboot
         self.dhcpboot = dhcpboot
         self.pxedir = pxedir
+        self.filesystems = filesystems
         self.linux_boot = linux_boot
         self.freebsd_boot = freebsd_boot
         self.db = TinyDB(dbfile)
@@ -94,12 +97,18 @@ class Tm(object):
         self.test = test
         self.kernelversion = KERNELVERSION
         self.fsversion = FSVERSION
+        self.sudo_user = None
+        if 'SUDO_USER' in os.environ:
+            self.sudo_user = os.environ['SUDO_USER']
+        self.run = lambda cmd: subprocess.run(split(cmd),
+                                              stdout=subprocess.DEVNULL)
 
         parser = ArgumentParser(description="tm - testbed management tool",
                 usage='tm [-h] COMMAND <args>')
         parser.add_argument('command', metavar='COMMAND',
-                choices=['inventory', 'power', 'console', 'reservation', 'user'],
-                help='{inventory|power|console|reservation|user}')
+                choices=['inventory', 'power', 'console', 'reservation', 'user',
+                    'filesystem'],
+                help='{inventory|power|console|reservation|user|filesystem}')
         args = parser.parse_args(argv[1:2])
         getattr(self, args.command)(argv)
 
@@ -474,9 +483,7 @@ class Tm(object):
             self.pr_msg(TmMsg.non_root('user'))
             return
 
-        run = lambda cmd: subprocess.run(split(cmd), stdout=subprocess.DEVNULL)
-
-        r = run('getent passwd {}'.format(user))
+        r = self.run('getent passwd {}'.format(user))
         if r.returncode != 0:
             self.pr_msg('no user')
             return
@@ -511,7 +518,7 @@ class Tm(object):
         # create homes
         for p in dirs:
             c = 'mkdir -m 755 {}'.format(Path(self.tftpboot)/p/user)
-            r = run(c)
+            r = self.run(c)
             if r.returncode != 0:
                 self.pr_msg('error in {}'.format(c))
                 return
@@ -540,21 +547,88 @@ class Tm(object):
             p = Path(self.tftpboot)/o[0]
             c = 'cp {} {}'.format(p/'base'/'{}-{}'.format(o[1],
                 self.kernelversion), p/user)
-            r = run(c)
+            r = self.run(c)
             if r.returncode != 0:
                 self.pr_msg('error in {}'.format(c))
                 return
 
         # fix permission
-        for d in ('loaders', 'initrd-imgs', 'kernels'):
+        for d in dirs:
             p = Path(self.tftpboot)/d
-            run('chown -R {}:{} {}'.format(user, user, p/user))
+            cmd = 'chown'
+            if d != 'filesystems':
+                cmd += ' -R'
+            self.run(cmd + ' {}:{} {}'.format(user, user, p/user))
 
         # create the file system
-        p = Path(self.tftpboot)/'filesystems'
-        run('tar xzpf {}.tar.gz -C {}'.format(p/'base'/self.fsversion, p/user))
-        run('chown {}:{} {}'.format(user, user, p/user/self.fsversion))
+        self.newfilesystem(user)
         self.pr_msg(TmMsg.success('user', 'add'))
+
+    # sudo from any user
+    # %bar    ALL=(ALL) NOPASSWD: tm filesystem *
+    def filesystem(self, argv):
+        u = self.curuser
+        if self.sudo_user:
+            u = self.sudo_user
+        parser = ArgumentParser(
+                description="tm-filesystem - filesystem operation",
+                usage='sudo tm filesystem COMMAND [<args>]')
+        subparsers = parser.add_subparsers(title='COMMAND')
+        for cmd in ('clone', 'new', 'delete'):
+            p = subparsers.add_parser(cmd,
+                    usage='tm filesystem {}'.format(cmd))
+            if cmd == 'clone' or cmd == 'delete':
+                p.add_argument('src', type=str,
+                        help='filesystem name in {}/{}'.format(
+                            self.filesystems, u))
+            if cmd == 'clone':
+                p.add_argument('dst', type=str, help='new filesystem name')
+                p.usage += ' {}'.format('<new filesystem>')
+            p.usage += ' {}'.format('[-h|--help]')
+            p.set_defaults(func=cmd)
+        args = parser.parse_args(argv[2:])
+        if not hasattr(args, 'func'): # XXX
+            parser.print_help()
+            return
+        if search('/', args.src):
+            self.pr_msg('provide a filesystem name only (no full path)')
+            return
+        if 'dst' in args:
+            if search('/', args.dst):
+                self.pr_msg('provide a filesystem name only (no full path)')
+                return
+
+        if self.sudo_user is None:
+            self.pr_msg(TmMsg.non_root(args.func))
+            return
+        u = self.sudo_user
+        path = Path(self.filesystems)
+        if args.func == 'new':
+            d = path/u/self.fsversion
+            if d.exists():
+                self.pr_msg('{} exists'.format(d))
+            else:
+                self.newfilesystem(u)
+            return
+        elif args.func == 'clone':
+            d = path/u/args.dst
+            if d.exists():
+                self.pr_msg('{} exists'.format(d))
+                return
+            cmd = 'cp -Rp {} {}'.format(path/u/args.src, path/u/args.dst)
+        elif args.func == 'delete':
+            d = path/u/args.src
+            if not d.exists():
+                self.pr_msg('{} does not exist'.format(d))
+                return
+            cmd = 'rm -rf {}'.format(path/u/args.src)
+        print(cmd)
+        self.run(cmd)
+        if args.func == 'clone':
+            cmd = 'chown {}:{} {}'.format(
+                    self.sudo_user, self.sudo_user, path/u/args.dst)
+            print(cmd)
+            self.run(cmd)
 
     def owner_or_root(self, node, needuser=True):
         r = self.db.get(Query().node == node)
@@ -640,6 +714,15 @@ class Tm(object):
             self.pr_msg('{}: cannot restore symlink for {}'.format(node, mac))
         for e in ['user', 'expire', 'email']:
             self.db.update(delete(e), Query().node == node)
+
+    def newfilesystem(self, user):
+            path = Path(self.filesystems)
+            cmd = 'tar xzpf {}.tar.gz -C {}'.format(
+                    path/"base"/self.fsversion, path/user)
+            print(cmd)
+            self.run(cmd)
+            self.run('chown {}:{} {}'.format(user, user,
+                path/user/self.fsversion))
 
     def get_db_from_user(self, user):
         res = [self.db.get(Query().user == user)]
