@@ -733,13 +733,13 @@ class Tm(object):
             self.db.update(delete(e), Query().node == node)
 
     def newfilesystem(self, user):
-            path = Path(self.filesystems)
-            cmd = 'tar xzpf {}.tar.gz -C {}'.format(
-                    path/"base"/self.fsversion, path/user)
-            print(cmd)
-            self.run(cmd)
-            self.run('chown {}:{} {}'.format(user, user,
-                path/user/self.fsversion))
+        path = Path(self.filesystems)
+        cmd = 'tar xzpf {}.tar.gz -C {}'.format(
+                path/"base"/self.fsversion, path/user)
+        print(cmd)
+        self.run(cmd)
+        self.run('chown {}:{} {}'.format(user, user,
+            path/user/self.fsversion))
 
     def get_db_from_user(self, user):
         res = [self.db.get(Query().user == user)]
