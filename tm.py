@@ -590,9 +590,10 @@ class Tm(object):
         if not hasattr(args, 'func'): # XXX
             parser.print_help()
             return
-        if search('/', args.src):
-            self.pr_msg('provide a filesystem name only (no full path)')
-            return
+        if 'src' in args:
+            if search('/', args.src):
+                self.pr_msg('provide a filesystem name only (no full path)')
+                return
         if 'dst' in args:
             if search('/', args.dst):
                 self.pr_msg('provide a filesystem name only (no full path)')
