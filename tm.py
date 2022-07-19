@@ -49,8 +49,10 @@ TFTPBOOT = '/var/lib/tftpboot'
 DHCPBOOT = str(Path(TFTPBOOT)/'machines')
 FILESYSTEMS = '/opt/nfs/filesystems'
 LINUX_BOOT = 'pxelinux.0'
+GRUB_BOOT = 'grubnetaa64.efi.signed'
 FREEBSD_BOOT = 'pxeboot'
 PXEDIR = 'pxelinux.cfg'
+GRUBDIR = 'grub'
 namehelp = 'hostname (e.g., n04)'
 dtfmt = '%d/%m/%y'
 MAXDAYS = 7
@@ -80,14 +82,17 @@ class TmMsg(object):
 class Tm(object):
     def __init__(self, argv, dbfile=DBFILE, tftpboot=TFTPBOOT, pxedir=PXEDIR,
             dhcpboot=DHCPBOOT, linux_boot=LINUX_BOOT, freebsd_boot=FREEBSD_BOOT,
-            filesystems=FILESYSTEMS, test=False):
+            filesystems=FILESYSTEMS, grubdir=GRUBDIR, grub_boot=GRUB_BOOT,
+            test=False):
         self.output = ''
         self.tftpboot = tftpboot
         self.dhcpboot = dhcpboot
         self.pxedir = pxedir
+        self.grubdir = grubdir
         self.filesystems = filesystems
         self.linux_boot = linux_boot
         self.freebsd_boot = freebsd_boot
+        self.grub_boot = grub_boot
         self.db = TinyDB(dbfile)
         self.ipmi_addr_off = 100
         self.addrs = ('mac', 'ip', 'ipmiaddr', 'ipmipass')
@@ -211,7 +216,7 @@ class Tm(object):
 
             d = {'user':getpass.getuser(), 'expire': dt.strftime(dtfmt)}
             if args.func == 'reserve':
-                if not self.reset_boot(args.node):
+                if not self.reset_boot(args.node, r['mac']):
                     self.pr_msg(TmMsg.symlink_fail(args.node))
                     return
                 if not self.set_loader(r['mac'], self.curuser, args.node):
@@ -689,7 +694,13 @@ class Tm(object):
         return True
 
     def set_loader(self, mac, u, node):
-        d = Path(self.dhcpboot)/Path(self.pxedir)/('01-'+mac.replace(':', '-'))
+        # Try pxelinux first
+        d = Path(self.dhcpboot)/Path(self.pxedir)/( '01-'+mac.replace(':', '-'))
+        # d.exists() doesn't work for broken symlink (missing user config file)
+        try:
+            d.lstat()
+        except:
+            d = Path(self.tftpboot)/Path(self.grubdir)/(mac)
         s = Path('../')/'loaders'/u/node
         return self.set_link(s, d)
 
@@ -705,12 +716,17 @@ class Tm(object):
             print('failed to link to'.format(src))
             return False
 
-    def reset_boot(self, node):
+    def reset_boot(self, node, mac):
+        d = Path(self.dhcpboot)/Path(self.pxedir)/( '01-'+mac.replace(':', '-'))
+        try:
+            d.lstat()
+        except:
+            return self.set_link(self.grub_boot, Path(self.dhcpboot)/node)
         return self.set_link(self.linux_boot, Path(self.dhcpboot)/node)
 
     def reset_node(self, node, mac):
         # reset to Linux
-        self.reset_boot(node)
+        self.reset_boot(node, mac)
         if not self.set_loader(mac, 'base', node):
             self.pr_msg('{}: cannot restore symlink for {}'.format(node, mac))
         for e in ['user', 'expire', 'email']:
@@ -745,3 +761,4 @@ class Tm(object):
 
 if __name__ == '__main__':
     print(Tm(sys.argv).output)
+
