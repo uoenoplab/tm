@@ -38,7 +38,8 @@ from shlex import split
 from tinydb import TinyDB, Query
 from tinydb.operations import delete
 from copy import copy
-from pandas import DataFrame
+from tabulate import tabulate
+from operator import itemgetter
 from datetime import datetime, timedelta
 import getpass
 from pathlib import Path
@@ -155,10 +156,12 @@ class Tm(object):
                 else:
                     self.pr_msg(TmMsg.empty_db())
                 return
-            df = DataFrame.from_dict(ans)
-            df.sort_values(by=['node'], inplace=True)
-            df.reset_index(drop=True, inplace=True)
-            self.pr_msg(df.reindex(columns=('node', 'user', 'expire', 'email')))
+            dics = sorted(ans, key=itemgetter('node'))
+            cls = ('node', 'user', 'expire', 'email')
+            newdics = []
+            for d in dics:
+                    newdics.append({k: d[k] for k in cls if k in d})
+            self.pr_msg(tabulate(newdics, headers='keys'))
             return
         elif args.func == 'clean':
             if self.curuser != 'root':
@@ -317,6 +320,9 @@ class Tm(object):
             del d['func']
             if args.func == 'update':
                 del d['node']
+                for k, v in d.items():
+                    if search(',', v):
+                        d[k] = v.replace(',', '\n')
                 self.db.update(d, Query().node == args.node)
             else:
                 self.db.insert(d)
@@ -330,19 +336,19 @@ class Tm(object):
                 else:
                     self.pr_msg(TmMsg.empty_db())
             elif args.func == 'show':
-                df = DataFrame.from_dict(ans)
-                df.sort_values(by=['node'], inplace=True)
-                df.reset_index(drop=True, inplace=True)
-                cls = list(df.columns)
-                reorders = ('node', 'mac', 'ip', 'ipmiaddr')
+                dics = sorted(ans, key=itemgetter('node'))
+                cls = list(dics[0].keys())
+                reorders = ['node', 'mac', 'ip', 'ipmiaddr']
                 for i, r in enumerate(reorders):
                     cls.remove(r)
                     cls.insert(i, r)
-                if args.func == 'show':
-                    for a in ('addrs', 'devices', 'reservations'):
-                        if not getattr(args, a):
-                            cls = [c for c in cls if c not in getattr(self, a)]
-                self.pr_msg(df.reindex(columns=cls))
+                for a in ('addrs', 'devices', 'reservations'):
+                    if not getattr(args, a):
+                        cls = [c for c in cls if c not in getattr(self, a)]
+                newdics = []
+                for d in dics:
+                    newdics.append({k: d[k] for k in cls if k in d})
+                self.pr_msg(tabulate(newdics, headers='keys'))
             else:
                 for node in ans:
                     # test dns
