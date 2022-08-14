@@ -58,7 +58,7 @@ namehelp = 'hostname (e.g., n04)'
 dtfmt = '%d/%m/%y'
 MAXDAYS = 7
 KERNELVERSION = '5.8.0-25-generic'
-FSVERSION = 'focal'
+FSVERSION = 'jammy'
 
 class TmMsg(object):
     def empty_db():
