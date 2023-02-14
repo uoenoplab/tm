@@ -325,7 +325,7 @@ class Tm(object):
                 del_keys = []
                 del d['node']
                 for k, v in d.items():
-                    if search(',', v):
+                    if search(',', v) and not args.ipmipass:
                         d[k] = v.replace(',', '\n')
                     elif v == '':
                         del_keys.append(k)
