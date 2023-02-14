@@ -45,7 +45,7 @@ import getpass
 from pathlib import Path
 from re import match, compile, search
 
-DBFILE = './tmdb.json'
+DBFILE = '/usr/local/tm/tmdb.json'
 TFTPBOOT = '/var/lib/tftpboot'
 DHCPBOOT = str(Path(TFTPBOOT)/'machines')
 FILESYSTEMS = '/opt/nfs/filesystems'
