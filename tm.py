@@ -57,7 +57,7 @@ GRUBDIR = 'grub'
 namehelp = 'hostname (e.g., n04)'
 dtfmt = '%d/%m/%y'
 MAXDAYS = 7
-KERNELVERSION = '5.8.0-25-generic'
+KERNELVERSION = '5.15.0-25-generic'
 FSVERSION = 'jammy'
 
 class TmMsg(object):
