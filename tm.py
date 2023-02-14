@@ -45,7 +45,7 @@ import getpass
 from pathlib import Path
 from re import match, compile, search
 
-DBFILE = '/usr/local/tm/tmdb.json'
+DBFILE = './tmdb.json'
 TFTPBOOT = '/var/lib/tftpboot'
 DHCPBOOT = str(Path(TFTPBOOT)/'machines')
 FILESYSTEMS = '/opt/nfs/filesystems'
@@ -250,9 +250,9 @@ class Tm(object):
                 p.add_argument('--reservations', action='store_true',
                         help='reservations') 
             p.set_defaults(func=cmd)
-        delete = subparsers.add_parser('delete')
-        delete.add_argument('node', type=str, help=namehelp)
-        delete.set_defaults(func='delete')
+        del_parser = subparsers.add_parser('delete')
+        del_parser.add_argument('node', type=str, help=namehelp)
+        del_parser.set_defaults(func='delete')
 
         t = True
         f = False
@@ -298,6 +298,7 @@ class Tm(object):
 
         elif args.func == 'add' or args.func == 'update':
 
+            # XXX removal of those keys is not allowed.
             if args.mac:
                 if not self.is_mac(args.mac):
                     self.pr_msg('{}: invalid MAC address'.format(args.node))
@@ -319,11 +320,18 @@ class Tm(object):
             d = {k:v for k, v in vars(args).items() if v is not None}
             del d['func']
             if args.func == 'update':
+                del_keys = []
                 del d['node']
                 for k, v in d.items():
                     if search(',', v):
                         d[k] = v.replace(',', '\n')
+                    elif v == '':
+                        del_keys.append(k)
+                d = {k:v for k, v in d.items() if k not in del_keys}
                 self.db.update(d, Query().node == args.node)
+                for k in del_keys:
+                    if k in self.db.get(Query().node == args.node):
+                        self.db.update(delete(k), Query().node == args.node)
             else:
                 self.db.insert(d)
             self.pr_msg(TmMsg.success(args.node, args.func))
