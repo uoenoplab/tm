@@ -270,6 +270,8 @@ class Tm(object):
             lm('--accel', str, f, 'Accelerator (e.g., ZOTAC GeForce GTX 1070)')
             lm('--note', str, f, 'Note (e.g., PCIe slot 1 is broken)')
             lm('--ipmiaddr', str, f, 'IPMI address (e.g., if not ip+100)')
+            lm('--chassis', str, f, 'Chassis (e.g., Supermicro 6029P-TRT)')
+            lm('--owner', str, f, 'Hardware owner (e.g., Michio Honda)')
             t = False
             p.add_argument('node', type=str, help=namehelp)
             p.set_defaults(func=cmd)
