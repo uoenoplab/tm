@@ -122,7 +122,7 @@ class Tm(object):
         parser = ArgumentParser(description="tm-reservation - node reservation",
                 usage='tm reservation COMMAND [<args>]')
         subparsers = parser.add_subparsers(title='COMMAND')
-        for cmd in ('reserve', 'update', 'release', 'show', 'clean'):
+        for cmd in ('reserve', 'update', 'release', 'show', 'clean', 'history'):
             p = subparsers.add_parser(cmd,
                     usage='tm reservation {}'.format(cmd))
             if cmd == 'show':
@@ -141,12 +141,18 @@ class Tm(object):
                 if cmd == 'reserve':
                     p.add_argument('email', type=str, help='email address')
                     p.usage += ' {}'.format('<email>')
+            elif cmd == 'history':
+                p.add_argument('--trim', type=str,
+                        help='number of days to keep the history')
+                p.usage += ' {}'.format('[--trim]')
             p.usage += ' {}'.format('[-h|--help]')
             p.set_defaults(func=cmd)
         args = parser.parse_args(argv[2:])
         if not hasattr(args, 'func'): # XXX
             parser.print_help()
             return
+
+        now = datetime.now()
 
         if args.func == 'show':
             ans = self.get_db(node=args.node)
@@ -178,6 +184,43 @@ class Tm(object):
                         self.power(
                             split('tm power poweroff {}'.format(v['node'])))
                     self.reset_node(v['node'], v['mac'])
+
+                    for e in ['user', 'expire', 'email']:
+                        self.db.update(delete(e), Query().node == v['node'])
+            return
+        elif args.func == 'history':
+            r = self.db.get(Query().node == args.node)
+            if 'history' not in r:
+                self.pr_msg('no history in {}'.format(args.node))
+                return
+            h = r['history']
+            if args.trim:
+                if not args.trim.isdigit():
+                    self.pr_msg('{}: invalid number of dates'.format(args.trim))
+                    return
+                for cnt, i in enumerate(reversed(h)):
+                    end = datetime.fromisoformat(i[2]) if i[2] else now
+                    end = end.date()
+                    if end <= now.date() - timedelta(days=int(args.trim)):
+                        break
+                else:
+                    return
+
+                if cnt == 0:
+                    self.db.update(delete('history'), Query().node == args.node)
+                else:
+                    self.db.update({'history': h[-cnt:]},
+                        Query().node == args.node)
+                return
+            t = []
+            for i in h:
+                start = datetime.fromisoformat(i[1])
+                delta = (datetime.fromisoformat(i[2]) if i[2] else now) - start
+                t.append( (i[0],
+                    datetime.strftime(start, '%b %d %H:%M:%S %Y'),
+                    delta - timedelta(microseconds=(delta).microseconds))
+                )
+            self.pr_msg(tabulate(t, headers=['user', 'start', 'duration']))
             return
 
         r = self.db.get(Query().node == args.node)
@@ -207,17 +250,18 @@ class Tm(object):
                 if not match(rc, args.email):
                     self.pr_msg('{}: invalid email address'.format(args.email))
                     return
-            today = datetime.now().date()
+            today = now.date()
             if dt < today:
                 self.pr_msg('date must be on or later than today')
                 return
             else:
-                latest = (datetime.now() + timedelta(days=MAXDAYS)).date()
+                latest = (now + timedelta(days=MAXDAYS)).date()
                 if dt > latest:
                     dt = latest
-                    self.pr_msg('set {} days of of the maximum duration'.format(MAXDAYS))
+                    self.pr_msg('set {} days of the maximum duration'.format(MAXDAYS))
 
             d = {'user':getpass.getuser(), 'expire': dt.strftime(dtfmt)}
+
             if args.func == 'reserve':
                 if not self.reset_boot(args.node, r['mac']):
                     self.pr_msg(TmMsg.symlink_fail(args.node))
@@ -226,11 +270,33 @@ class Tm(object):
                     self.pr_msg(TmMsg.symlink_fail(args.node))
                     return
                 d['email'] = args.email
+
+                # create or append to the history
+                r = self.db.get(Query().node == args.node)
+                h = r['history'] if 'history' in r else []
+                h.append((self.curuser, now.isoformat(), ''))
+                d['history'] = h
+
             self.db.update(d, Query().node == args.node)
-        else:
+        else: # release
+
+            # record the time
+            r = self.db.get(Query().node == args.node)
+            if 'history' in r:
+                h = r['history']
+                if h[-1][0] != self.curuser:
+                    # admin might release the reservation
+                    self.pr_msg('current entry {} but now {}'.format(h[-1][0],
+                        self.curuser))
+                h[-1][2] = now.isoformat()
+                self.db.update({'history': h}, Query().node == args.node)
+
             if not self.test:
                 self.power(split('tm power poweroff {}'.format(args.node)))
             self.reset_node(args.node, r['mac'])
+
+            for e in ['user', 'expire', 'email']:
+                self.db.update(delete(e), Query().node == args.node)
         self.pr_msg(TmMsg.success(args.node, args.func))
 
     def inventory(self, argv):
@@ -745,8 +811,6 @@ class Tm(object):
         self.reset_boot(node, mac)
         if not self.set_loader(mac, 'base', node):
             self.pr_msg('{}: cannot restore symlink for {}'.format(node, mac))
-        for e in ['user', 'expire', 'email']:
-            self.db.update(delete(e), Query().node == node)
 
     def newfilesystem(self, user):
         path = Path(self.filesystems)
