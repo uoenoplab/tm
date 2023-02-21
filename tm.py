@@ -33,17 +33,19 @@ import os
 import pyipmi
 import pyipmi.interfaces
 import socket
+import paramiko
+import json
 import subprocess
 from shlex import split
-from tinydb import TinyDB, Query
+from tinydb import TinyDB, Query, where
 from tinydb.operations import delete
-from copy import copy
 from tabulate import tabulate
 from operator import itemgetter
 from datetime import datetime, timedelta
 import getpass
 from pathlib import Path
-from re import match, compile, search
+import re
+from re import match, compile, search, sub
 
 DBFILE = '/usr/local/tm/tmdb.json'
 TFTPBOOT = '/var/lib/tftpboot'
@@ -97,7 +99,7 @@ class Tm(object):
         self.db = TinyDB(dbfile)
         self.ipmi_addr_off = 100
         self.addrs = ('mac', 'ip', 'ipmiaddr', 'ipmipass')
-        self.devices = ('disk', 'nic', 'accel')
+        self.devices = ('disk', 'nic', 'ram', 'owner', 'note')
         self.reservations = ('user', 'expire', 'email')
         self.curuser = getpass.getuser()
         self.test = test
@@ -157,39 +159,34 @@ class Tm(object):
         if args.func == 'show':
             ans = self.get_db(node=args.node)
             if not ans:
-                if args.node:
-                    self.pr_msg(TmMsg.not_in_inventory(args.node))
-                else:
-                    self.pr_msg(TmMsg.empty_db())
+                self.pr_msg(TmMsg.not_in_inventory(args.node)
+                        if args.node else TmMsg.empty_db())
                 return
             dics = sorted(ans, key=itemgetter('node'))
             cls = ('node', 'user', 'expire', 'email')
-            newdics = []
-            for d in dics:
-                    newdics.append({k: d[k] for k in cls if k in d})
+            newdics = [{k: d[k] for k in cls if k in d} for d in dics]
             self.pr_msg(tabulate(newdics, headers='keys'))
             return
+
         elif args.func == 'clean':
             if self.curuser != 'root':
                 self.pr_msg(TmMsg.non_root(args.func))
                 return
-            today = datetime.now().date()
             ans = self.get_db()
             for v in ans:
                 if not 'user' in v:
                     continue
-                if (args.noexpire or
-                    today > datetime.strptime(v['expire'], dtfmt).date()):
-                    if not self.test:
-                        self.power(
-                            split('tm power poweroff {}'.format(v['node'])))
-                    self.reset_node(v['node'], v['mac'])
-
-                    for e in ['user', 'expire', 'email']:
-                        self.db.update(delete(e), Query().node == v['node'])
+                if (args.noexpire or now.date()
+                        > datetime.strptime(v['expire'], dtfmt).date()):
+                    self.do_release(v, now)
             return
-        elif args.func == 'history':
-            r = self.db.get(Query().node == args.node)
+
+        r = self.db.get(Query().node == args.node)
+        if not r:
+            self.pr_msg(TmMsg.invalid_node(args.node))
+            return
+
+        if args.func == 'history':
             if 'history' not in r:
                 self.pr_msg('no history in {}'.format(args.node))
                 return
@@ -205,98 +202,71 @@ class Tm(object):
                         break
                 else:
                     return
-
-                if cnt == 0:
-                    self.db.update(delete('history'), Query().node == args.node)
-                else:
-                    self.db.update({'history': h[-cnt:]},
-                        Query().node == args.node)
+                self.db.update(delete('history') if cnt == 0 else {'history':
+                    h[-cnt:]}, Query().node == args.node)
                 return
             t = []
             for i in h:
                 start = datetime.fromisoformat(i[1])
                 delta = (datetime.fromisoformat(i[2]) if i[2] else now) - start
-                t.append( (i[0],
-                    datetime.strftime(start, '%b %d %H:%M:%S %Y'),
+                t.append( (i[0], datetime.strftime(start, '%b %d %H:%M:%S %Y'),
                     delta - timedelta(microseconds=(delta).microseconds))
                 )
             self.pr_msg(tabulate(t, headers=['user', 'start', 'duration']))
             return
 
-        r = self.db.get(Query().node == args.node)
-        if not r:
-            self.pr_msg(TmMsg.invalid_node(args.node))
-            return
-        elif args.func == 'reserve':
-            if 'user' in r:
-                self.pr_msg(TmMsg.in_use(args.node, r['user']))
-                return
-            elif self.curuser == 'root':
-                self.pr_msg('root cannot reserve nodes')
-                return
-        elif args.func == 'release' or args.func == 'update':
-            if not self.owner_or_root(args.node):
-                return
-
         if args.func == 'reserve' or args.func == 'update':
-            try:
-                dt = datetime.strptime(args.expire, dtfmt).date()
-            except(ValueError):
-                self.pr_msg('date format must be dd/mm/yy')
-                return
             if args.func == 'reserve':
+                if 'user' in r:
+                    self.pr_msg(TmMsg.in_use(args.node, r['user']))
+                    return
+                elif self.curuser == 'root':
+                    self.pr_msg('root cannot reserve nodes')
+                    return
                 rc = compile(
                         r"^[A-Za-z0-9\.\+_-]+@[A-Za-z0-9\._-]+\.[a-zA-Z]*$")
                 if not match(rc, args.email):
                     self.pr_msg('{}: invalid email address'.format(args.email))
                     return
+            elif args.func == 'update':
+                if not self.owner_or_root(args.node):
+                    return
+
+            try:
+                dt = datetime.strptime(args.expire, dtfmt).date()
+            except(ValueError):
+                self.pr_msg('date format must be dd/mm/yy')
+                return
             today = now.date()
             if dt < today:
                 self.pr_msg('date must be on or later than today')
                 return
-            else:
-                latest = (now + timedelta(days=MAXDAYS)).date()
-                if dt > latest:
-                    dt = latest
-                    self.pr_msg('set {} days of the maximum duration'.format(MAXDAYS))
+            latest = (now + timedelta(days=MAXDAYS)).date()
+            if dt > latest:
+                dt = latest
+                self.pr_msg('set the maximum duration {} days'.format(MAXDAYS))
 
             d = {'user':getpass.getuser(), 'expire': dt.strftime(dtfmt)}
-
             if args.func == 'reserve':
-                if not self.reset_boot(args.node, r['mac']):
-                    self.pr_msg(TmMsg.symlink_fail(args.node))
-                    return
-                if not self.set_loader(r['mac'], self.curuser, args.node):
-                    self.pr_msg(TmMsg.symlink_fail(args.node))
-                    return
+                if self.is_bootable(r):
+                    if not self.reset_boot(args.node, r['mac']):
+                        self.pr_msg(TmMsg.symlink_fail(args.node))
+                        return
+                    if not self.set_loader(r['mac'], self.curuser, args.node):
+                        self.pr_msg(TmMsg.symlink_fail(args.node))
+                        return
                 d['email'] = args.email
 
                 # create or append to the history
-                r = self.db.get(Query().node == args.node)
                 h = r['history'] if 'history' in r else []
                 h.append((self.curuser, now.isoformat(), ''))
                 d['history'] = h
 
             self.db.update(d, Query().node == args.node)
         else: # release
-
-            # record the time
-            r = self.db.get(Query().node == args.node)
-            if 'history' in r:
-                h = r['history']
-                if h[-1][0] != self.curuser:
-                    # admin might release the reservation
-                    self.pr_msg('current entry {} but now {}'.format(h[-1][0],
-                        self.curuser))
-                h[-1][2] = now.isoformat()
-                self.db.update({'history': h}, Query().node == args.node)
-
-            if not self.test:
-                self.power(split('tm power poweroff {}'.format(args.node)))
-            self.reset_node(args.node, r['mac'])
-
-            for e in ['user', 'expire', 'email']:
-                self.db.update(delete(e), Query().node == args.node)
+            if not self.owner_or_root(args.node):
+                return
+            self.do_release(r, now)
         self.pr_msg(TmMsg.success(args.node, args.func))
 
     def inventory(self, argv):
@@ -315,30 +285,29 @@ class Tm(object):
                         help='I/O peripherals') 
                 p.add_argument('--reservations', action='store_true',
                         help='reservations') 
+                p.add_argument('--misc', type=str, help='--misc NODE')
             p.set_defaults(func=cmd)
         del_parser = subparsers.add_parser('delete')
         del_parser.add_argument('node', type=str, help=namehelp)
         del_parser.set_defaults(func='delete')
 
-        t = True
-        f = False
         for cmd in ('add', 'update'):
             p = subparsers.add_parser(cmd,
                     usage='tm inventory {} [<args>] <node>'.format(cmd))
-            lm = lambda o, t, r, h: p.add_argument(o, type=t, required=r, help=h)
-            lm('--mac', str, t, 'MAC addr (e.g., 00:00:00:00:00:00)')
-            lm('--ip', str, t, 'IPv4 addr (e.g., 192.168.0.2)')
-            lm('--ipmipass', str, t, 'IPMI user,pass (e.g., ADMIN,ADMIN)')
-            lm('--cpu', str, t, 'CPU (e.g., Xeon E3-1220v3)')
-            lm('--ram', int, t, 'RAM in GB (e.g., 64)')
-            lm('--nic', str, t, '(non-boot) NIC (e.g., Intel X520-SR2)')
-            lm('--disk', str, f, 'Disk (e.g., Samsung Evo 870 256GB)')
-            lm('--accel', str, f, 'Accelerator (e.g., ZOTAC GeForce GTX 1070)')
-            lm('--note', str, f, 'Note (e.g., PCIe slot 1 is broken)')
-            lm('--ipmiaddr', str, f, 'IPMI address (e.g., if not ip+100)')
-            lm('--chassis', str, f, 'Chassis (e.g., Supermicro 6029P-TRT)')
-            lm('--owner', str, f, 'Hardware owner (e.g., Michio Honda)')
-            t = False
+            lm = lambda o, t, h: p.add_argument(o, type=t, help=h)
+            lm('--mac', str, 'MAC addr (e.g., 00:00:00:00:00:00)')
+            lm('--ip', str, 'IPv4 addr (e.g., 192.168.0.2)')
+            lm('--ipmipass', str, 'IPMI user,pass (e.g., ADMIN,ADMIN)')
+            lm('--cpu', str, 'CPU (e.g., Xeon E3-1220v3)')
+            lm('--ram', int, 'RAM in GB (e.g., 64)')
+            lm('--nic', str, '(non-boot) NIC (e.g., Intel X520-SR2)')
+            lm('--disk', str, 'Disk (e.g., Samsung Evo 870 256GB)')
+            lm('--note', str, 'Note (e.g., PCIe slot 1 is broken)')
+            lm('--ipmiaddr', str, 'IPMI address (e.g., if not ip+100)')
+            lm('--chassis', str, 'Chassis (e.g., SMC 6029P-TRT)')
+            lm('--misc', str,'func:args to retrieve info for non-regular '
+                'server (e.g., mlx_interfaces:mellanox2)')
+            lm('--owner', str, 'Hardware owner (e.g., Michio Honda)')
             p.add_argument('node', type=str, help=namehelp)
             p.set_defaults(func=cmd)
 
@@ -346,78 +315,103 @@ class Tm(object):
         if not hasattr(args, 'func'): # XXX
             parser.print_help()
             return
-        if hasattr(args, 'node'):
-            if args.node:
-                ans = self.db.get(Query().node == args.node)
-                if args.func == 'add':
-                    if ans and 'node' in ans:
-                        self.pr_msg('{}: already exist'.format(args.node))
-                        return
-                elif None in self.get_addrs_dict(ans):
-                    self.pr_msg(TmMsg.invalid_node(args.node))
-                    return
+
+        # XXX
+        if args.func == 'show' and args.misc:
+            args.node = args.misc
+
+        ans = self.get_db(node=args.node)
 
         if args.func == 'delete':
-            if 'user' in ans:
-                self.pr_msg(TmMsg.in_use(args.node, ans['user']))
+            if ans is None:
+                self.pr_msg(TmMsg.not_in_inventory(args.node))
                 return
-            self.db.remove(doc_ids=[ans.doc_id,])
+            node = ans[0]
+            if 'user' in node:
+                self.pr_msg(TmMsg.in_use(args.node, node['user']))
+                return
+            self.db.remove(doc_ids=[node.doc_id,])
             self.pr_msg(TmMsg.success(args.node, args.func))
 
-        elif args.func == 'add' or args.func == 'update':
-
-            # XXX removal of those keys is not allowed.
-            if args.mac:
+        elif args.func in ('add', 'update'):
+            if args.func == 'add':
+                if ans:
+                    self.pr_msg('{}: already exist'.format(args.node))
+                    return
+            else:
+                node = ans[0]
+            if args.mac and args.mac != '':
                 if not self.is_mac(args.mac):
                     self.pr_msg('{}: invalid MAC address'.format(args.node))
                     return
-            if args.ip:
+            if args.ip and args.ip != '':
                 if not self.is_ipaddr(args.ip):
                     self.pr_msg('{}: invalid IP address'.format(args.node))
                     return
-            if args.ipmiaddr:
+            if args.ipmiaddr and args.ipmiaddr != '':
                 if not self.is_ipaddr(args.ipmiaddr):
                     self.pr_msg('{}: invalid IPMI address'.format(args.node))
                     return
-            if args.ipmipass:
+            if args.ipmipass and args.ipmipass != '':
                 if not self.is_ipmipass(args.ipmipass):
                     self.pr_msg('{}: IPMI login must be USER,PASS'.format(
                         args.node))
                     return
+            if args.misc and args.misc != '':
+                # so far this is only option
+                miscval, *miscargs = args.misc.split(':')
+                try:
+                    f = getattr(self, miscval)
+                    args.misc = f(*miscargs)
+                except:
+                    self.pr_msg('{}: failed {}({})'.format(
+                        args.node, miscval, *miscargs))
+                    return
 
             d = {k:v for k, v in vars(args).items() if v is not None}
             del d['func']
-            if args.func == 'update':
-                del_keys = []
-                del d['node']
-                for k, v in d.items():
-                    if search(',', v) and not args.ipmipass:
+            del_keys = [] # also prevent empty value from being added
+            for k, v in d.items():
+                if v == '':
+                    del_keys.append(k)
+                elif not k in ('ipmipass', 'misc', 'note'):
+                    if search(',', v):
                         d[k] = v.replace(',', '\n')
-                    elif v == '':
-                        del_keys.append(k)
-                d = {k:v for k, v in d.items() if k not in del_keys}
+            d = {k:v for k, v in d.items() if k not in del_keys}
+            if args.func == 'update':
+                del d['node']
                 self.db.update(d, Query().node == args.node)
-                for k in del_keys:
-                    if k in self.db.get(Query().node == args.node):
-                        self.db.update(delete(k), Query().node == args.node)
+                for k in (k for k in del_keys if k in node):
+                    self.db.update(delete(k), Query().node == args.node)
             else:
                 self.db.insert(d)
+
             self.pr_msg(TmMsg.success(args.node, args.func))
 
         elif args.func == 'show' or args.func == 'test':
-            ans = self.get_db(node=args.node)
             if ans is None:
-                if args.node:
-                    self.pr_msg(TmMsg.not_in_inventory(args.node))
-                else:
-                    self.pr_msg(TmMsg.empty_db())
+                self.pr_msg(TmMsg.not_in_inventory(args.node) if args.node
+                        else TmMsg.empty_db())
             elif args.func == 'show':
+                if args.misc:
+                    # misc always has node
+                    self.pr_msg(ans[0]['misc'] if 'misc' in ans[0]
+                        else '{} no entry'.format(args.node))
+                    return
+
                 dics = sorted(ans, key=itemgetter('node'))
-                cls = list(dics[0].keys())
-                reorders = ['node', 'mac', 'ip', 'ipmiaddr']
+                ks = [i for s in [list(d.keys()) for d in dics] for i in s]
+                cls = list(set(ks))
+
+                reorders = ['node', 'mac', 'ip', 'ipmiaddr', 'ipmipass',
+                        'chassis', 'cpu', 'ram', 'nic', 'disk',
+                        'user', 'expire', 'email', 'owner']
                 for i, r in enumerate(reorders):
-                    cls.remove(r)
-                    cls.insert(i, r)
+                    if r in cls:
+                        cls.remove(r)
+                        cls.insert(i, r)
+                cls = cls[:i+1]
+
                 for a in ('addrs', 'devices', 'reservations'):
                     if not getattr(args, a):
                         cls = [c for c in cls if c not in getattr(self, a)]
@@ -427,6 +421,9 @@ class Tm(object):
                 self.pr_msg(tabulate(newdics, headers='keys'))
             else:
                 for node in ans:
+                    # misc devices cannot be tested
+                    if not self.is_bootable(node):
+                        continue
                     # test dns
                     try:
                         addr = socket.gethostbyname(node['node'])
@@ -812,6 +809,38 @@ class Tm(object):
         if not self.set_loader(mac, 'base', node):
             self.pr_msg('{}: cannot restore symlink for {}'.format(node, mac))
 
+    def is_bootable(self, ne):
+        if not all(e in ne for e in ('mac', 'addr', 'ipmiaddr', 'ipmipass')):
+            return False
+        mac = ne['mac']
+        for d in (
+          Path(self.dhcpboot)/Path(self.pxedir)/( '01-'+mac.replace(':', '-')),
+          Path(self.tftpboot)/Path(self.grubdir)/(mac)):
+            try:
+                d.lstat()
+                return True
+            except:
+                pass
+        return False
+
+    def do_release(self, node, now):
+        if 'history' in node:
+            h = node['history']
+            if h[-1][0] != self.curuser:
+                # admin might release the reservation
+                self.pr_msg('current entry {} but now {}'.format(h[-1][0],
+                    self.curuser))
+            h[-1][2] = now.isoformat()
+            self.db.update({'history': h}, Query().node == node['user'])
+        if self.is_bootable(node):
+            if not self.test:
+                self.power(split('tm power poweroff {}'.format(node['user'])))
+            self.reset_node(node['node'], node['mac'])
+
+        for e in ['user', 'expire', 'email']:
+            print('e', e, node['user'])
+            self.db.update(delete(e), Query().node == node['node'])
+
     def newfilesystem(self, user):
         path = Path(self.filesystems)
         cmd = 'tar xzpf {}.tar.gz -C {}'.format(
@@ -838,6 +867,39 @@ class Tm(object):
 
     def pr_msg(self, msg):
         self.output = msg
+
+    @staticmethod
+    def mlnx_interfaces(name):
+        client = paramiko.client.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(name, username="admin", password="admin")
+        chan = client.invoke_shell(height=512)
+        chan.settimeout(10)
+        chan.sendall('show interfaces status \r\n')
+        sheet_str = ""
+        while (sheet_str.count(name) < 2):
+            sheet_str += chan.recv(4096).decode('utf-8')
+        sheet_str = sheet_str.replace(' \x08', '')
+        r = search('mgmt0', sheet_str)
+        sheet_str = r.string[r.start():]
+        r = search(name, sheet_str)
+        sheet_str = r.string[:r.start()]
+        l = []
+        for i in [i.strip() for i in sheet_str.split('\r\n')
+                if re.match('Eth', i)]:
+            i = sub('\s+', ' ', i)
+            i = sub('\(.*?\)', '', i)
+            i = sub('-', '', i)
+            cols = re.split(' ', i)
+            if not search(':', cols[5]):
+                continue
+            l.append({
+              'interface': cols[0], 'status': cols[1], 'speed': cols[3],
+              'node': cols[5].split(':')[0], 'ifname': cols[5].split(':')[1],
+              'ipaddr': '192.168.11.'+cols[0].replace('Eth1/', '').replace('/',
+                    '') + '/24'
+                })
+        return l
 
 if __name__ == '__main__':
     print(Tm(sys.argv).output)
