@@ -812,7 +812,7 @@ class Tm(object):
             self.pr_msg('{}: cannot restore symlink for {}'.format(node, mac))
 
     def is_bootable(self, ne):
-        if not all(e in ne for e in ('mac', 'addr', 'ipmiaddr', 'ipmipass')):
+        if not all(e in ne for e in ('mac', 'ip', 'ipmiaddr', 'ipmipass')):
             return False
         mac = ne['mac']
         for d in (
@@ -840,7 +840,6 @@ class Tm(object):
             self.reset_node(node['node'], node['mac'])
 
         for e in ['user', 'expire', 'email']:
-            print('e', e, node['user'])
             self.db.update(delete(e), Query().node == node['node'])
 
     def newfilesystem(self, user, src, dst):
