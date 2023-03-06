@@ -836,7 +836,7 @@ class Tm(object):
             self.db.update({'history': h}, Query().node == node['user'])
         if self.is_bootable(node):
             if not self.test:
-                self.power(split('tm power poweroff {}'.format(node['user'])))
+                self.power(split('tm power poweroff {}'.format(node['node'])))
             self.reset_node(node['node'], node['mac'])
 
         for e in ['user', 'expire', 'email']:
