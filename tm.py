@@ -658,7 +658,7 @@ class Tm(object):
                 description="tm-filesystem - filesystem operation",
                 usage='sudo tm filesystem COMMAND [<args>]')
         subparsers = parser.add_subparsers(title='COMMAND')
-        for cmd in ('clone', 'new', 'delete'):
+        for cmd in ('clone', 'new', 'delete', 'archive'):
             p = subparsers.add_parser(cmd,
                     usage='tm filesystem {}'.format(cmd))
             if cmd == 'new':
@@ -668,13 +668,14 @@ class Tm(object):
                         help='filesystem tarball in {}'.format(
                             self.filesystems + '/base'))
                 p.usage += ' {}'.format('<filesystem tarball>')
-            if cmd in ('clone', 'delete'):
+            if cmd in ('clone', 'delete', 'archive'):
                 p.add_argument('src', type=str,
                         help='filesystem name in {}/{}'.format(
                             self.filesystems, u))
             if cmd == 'clone':
                 p.add_argument('dst', type=str, help='new filesystem name')
                 p.usage += ' {}'.format('<new filesystem>')
+
             p.usage += ' {}'.format('[-h|--help]')
             p.set_defaults(func=cmd)
         args = parser.parse_args(argv[2:])
@@ -697,7 +698,8 @@ class Tm(object):
             return
 
         path = Path(self.filesystems)/u
-        s = path/args.src
+        s = path/args.src.strip('/')
+        d = ''
         if not s.exists():
             self.pr_msg('{} does not exist'.format(s))
             return
@@ -709,11 +711,17 @@ class Tm(object):
                 self.pr_msg('{} exists'.format(d))
                 return
             cmd = 'cp -Rp {} {}'.format(path/args.src, path/args.dst)
+        elif args.func == 'archive':
+            d = path/(args.src + '.tar.xz')
+            if d.exists():
+                self.pr_msg('{} exists'.format(d))
+                return
+            cmd = 'tar cJpf {} -C {} {}'.format(d, path, args.src)
         print(cmd)
         self.run(cmd)
-        if args.func == 'clone':
+        if args.func == 'clone' or args.func == 'archive':
             cmd = 'chown {}:{} {}'.format(
-                    self.sudo_user, self.sudo_user, path/args.dst)
+                    self.sudo_user, self.sudo_user, d)
             print(cmd)
             self.run(cmd)
 
