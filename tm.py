@@ -374,7 +374,7 @@ class Tm(object):
             for k, v in d.items():
                 if v == '':
                     del_keys.append(k)
-                elif not k in ('ipmipass', 'misc', 'note'):
+                elif not k in ('ram', 'ipmipass', 'misc', 'note'):
                     if search(',', v):
                         d[k] = v.replace(',', '\n')
             d = {k:v for k, v in d.items() if k not in del_keys}
@@ -667,7 +667,7 @@ class Tm(object):
                 p.add_argument('--src', type=str,
                         help='filesystem tarball in {}'.format(
                             self.filesystems + '/base'))
-                p.usage += ' {}'.format('<filesystem tarball>')
+                p.usage += ' {}'.format('<filesystem tarball (without extension)>')
             if cmd in ('clone', 'delete', 'archive'):
                 p.add_argument('src', type=str,
                         help='filesystem name in {}/{}'.format(
