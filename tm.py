@@ -52,7 +52,8 @@ TFTPBOOT = '/var/lib/tftpboot'
 DHCPBOOT = str(Path(TFTPBOOT)/'machines')
 FILESYSTEMS = '/opt/nfs/filesystems'
 LINUX_BOOT = 'pxelinux.0'
-GRUB_BOOT = 'grubnetaa64.efi.signed'
+GRUB_LINUX_AA64 = 'grubnetaa64.efi.signed'
+GRUB_LINUX_X64 = 'grubnetx64.efi.signed'
 FREEBSD_BOOT = 'pxeboot'
 PXEDIR = 'pxelinux.cfg'
 GRUBDIR = 'grub'
@@ -85,7 +86,7 @@ class TmMsg(object):
 class Tm(object):
     def __init__(self, argv, dbfile=DBFILE, tftpboot=TFTPBOOT, pxedir=PXEDIR,
             dhcpboot=DHCPBOOT, linux_boot=LINUX_BOOT, freebsd_boot=FREEBSD_BOOT,
-            filesystems=FILESYSTEMS, grubdir=GRUBDIR, grub_boot=GRUB_BOOT,
+            filesystems=FILESYSTEMS, grubdir=GRUBDIR,
             test=False):
         self.output = ''
         self.tftpboot = tftpboot
@@ -95,11 +96,10 @@ class Tm(object):
         self.filesystems = filesystems
         self.linux_boot = linux_boot
         self.freebsd_boot = freebsd_boot
-        self.grub_boot = grub_boot
         self.db = TinyDB(dbfile)
         self.ipmi_addr_off = 100
         self.addrs = ('mac', 'ip', 'ipmiaddr', 'ipmipass')
-        self.devices = ('disk', 'nic', 'ram', 'owner', 'note')
+        self.devices = ('disk', 'nic', 'ram', 'owner', 'note', 'boot')
         self.reservations = ('user', 'expire', 'email')
         self.curuser = getpass.getuser()
         self.test = test
@@ -249,10 +249,7 @@ class Tm(object):
             d = {'user':getpass.getuser(), 'expire': dt.strftime(dtfmt)}
             if args.func == 'reserve':
                 if self.is_bootable(r):
-                    if not self.reset_boot(args.node, r['mac']):
-                        self.pr_msg(TmMsg.symlink_fail(args.node))
-                        return
-                    if not self.set_loader(r['mac'], self.curuser, args.node):
+                    if not self.reset_node(args.node, r['mac'], self.curuser):
                         self.pr_msg(TmMsg.symlink_fail(args.node))
                         return
                 d['email'] = args.email
@@ -308,6 +305,7 @@ class Tm(object):
             lm('--misc', str,'func:args to retrieve info for non-regular '
                 'server (e.g., mlx_interfaces:mellanox2)')
             lm('--owner', str, 'Hardware owner (e.g., Michio Honda)')
+            lm('--boot', str, 'bios or uefi')
             p.add_argument('node', type=str, help=namehelp)
             p.set_defaults(func=cmd)
 
@@ -340,6 +338,9 @@ class Tm(object):
                     return
             else:
                 node = ans[0]
+            if args.boot and args.boot not in ('bios', 'uefi'):
+                    self.pr_msg('{}: must be bios or uefi'.format(args.node))
+                    return
             if args.mac and args.mac != '':
                 if not self.is_mac(args.mac):
                     self.pr_msg('{}: invalid MAC address'.format(args.node))
@@ -404,7 +405,7 @@ class Tm(object):
                 cls = list(set(ks))
 
                 reorders = ['node', 'mac', 'ip', 'ipmiaddr', 'ipmipass',
-                        'chassis', 'cpu', 'ram', 'nic', 'disk',
+                        'chassis', 'cpu', 'ram', 'nic', 'disk', 'boot',
                         'user', 'expire', 'email', 'owner']
                 for i, r in enumerate(reorders):
                     if r in cls:
@@ -782,55 +783,51 @@ class Tm(object):
             return False
         return True
 
-    def set_loader(self, mac, u, node):
-        # Try pxelinux first
-        d = Path(self.dhcpboot)/Path(self.pxedir)/( '01-'+mac.replace(':', '-'))
+    @staticmethod
+    def islink(p):
         # d.exists() doesn't work for broken symlink (missing user config file)
         try:
-            d.lstat()
+            p.lstat()
+            return True
         except:
-            d = Path(self.tftpboot)/Path(self.grubdir)/(mac)
-        s = Path('../')/'loaders'/u/node
-        return self.set_link(s, d)
+            return False
 
     def set_link(self, src, dst):
+        if not self.islink(dst):
+            return False
         try:
             dst.unlink()
         except:
-            print('cannot remove the link {}'.format(dst))
+            print('WARNING: cannot remove the link {}'.format(dst))
         try:
             dst.symlink_to(src)
             return True
         except:
-            print('failed to link to'.format(src))
+            print('WARNING: failed to create a link to'.format(src))
             return False
 
-    def reset_boot(self, node, mac):
-        d = Path(self.dhcpboot)/Path(self.pxedir)/( '01-'+mac.replace(':', '-'))
-        try:
-            d.lstat()
-        except:
-            return self.set_link(self.grub_boot, Path(self.dhcpboot)/node)
-        return self.set_link(self.linux_boot, Path(self.dhcpboot)/node)
-
-    def reset_node(self, node, mac):
-        # reset to Linux
-        self.reset_boot(node, mac)
-        if not self.set_loader(mac, 'base', node):
-            self.pr_msg('{}: cannot restore symlink for {}'.format(node, mac))
+    def reset_node(self, node, mac, user):
+        # set the boot loader
+        if self.get_boot(node) == 'uefi':
+            boot = GRUB_LINUX_AA64 if self.get_aa64(node) else GRUB_LINUX_X64
+            p = Path(self.tftpboot)/self.grubdir/mac
+        else:
+            boot = self.linux_boot
+            p = Path(self.dhcpboot)/self.pxedir/( '01-'+mac.replace(':', '-'))
+        self.set_link(boot, Path(self.dhcpboot)/node) # XXX ignore error
+        # set the user configuration
+        return self.set_link(Path('../')/'loaders'/user/node, p)
 
     def is_bootable(self, ne):
-        if not all(e in ne for e in ('mac', 'ip', 'ipmiaddr', 'ipmipass')):
+        if not all(e in ne for e in
+                ('boot', 'mac', 'ip', 'ipmiaddr', 'ipmipass')):
             return False
         mac = ne['mac']
         for d in (
           Path(self.dhcpboot)/Path(self.pxedir)/( '01-'+mac.replace(':', '-')),
           Path(self.tftpboot)/Path(self.grubdir)/(mac)):
-            try:
-                d.lstat()
+            if self.islink(d):
                 return True
-            except:
-                pass
         return False
 
     def do_release(self, node, now):
@@ -845,7 +842,10 @@ class Tm(object):
         if self.is_bootable(node):
             if not self.test:
                 self.power(split('tm power poweroff {}'.format(node['node'])))
-            self.reset_node(node['node'], node['mac'])
+            r = self.reset_node(node['node'], node['mac'], 'base')
+            if not r:
+                self.pr_msg('{}: cannot restore symlink for {}'.format(node,
+                    mac))
 
         for e in ['user', 'expire', 'email']:
             self.db.update(delete(e), Query().node == node['node'])
@@ -884,6 +884,15 @@ class Tm(object):
     def get_ipmi_cred(self, node):
         r = self.db.get(Query().node == node)
         return r['ipmipass'].split(',')
+
+    # XXX
+    def get_aa64(self, node):
+        r = self.db.get(Query().node == node)
+        return True if re.search('Neoverse', r['cpu']) else False
+
+    def get_boot(self, node):
+        r = self.db.get(Query().node == node)
+        return r['boot']
 
     def pr_msg(self, msg):
         self.output = msg
