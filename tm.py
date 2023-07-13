@@ -845,7 +845,7 @@ class Tm(object):
             r = self.reset_node(node['node'], node['mac'], 'base')
             if not r:
                 self.pr_msg('{}: cannot restore symlink for {}'.format(node,
-                    mac))
+                    node['mac']))
 
         for e in ['user', 'expire', 'email']:
             self.db.update(delete(e), Query().node == node['node'])
