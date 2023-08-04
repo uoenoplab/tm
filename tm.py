@@ -46,16 +46,14 @@ import getpass
 from pathlib import Path
 import re
 from re import match, compile, search, sub
+from ipaddress import IPv4Address
 
 DBFILE = '/usr/local/tm/tmdb.json'
 TFTPBOOT = '/var/lib/tftpboot'
 DHCPBOOT = str(Path(TFTPBOOT)/'machines')
 FILESYSTEMS = '/opt/nfs/filesystems'
-LINUX_BOOT = 'pxelinux.0'
 GRUB_LINUX_AA64 = 'grubnetaa64.efi.signed'
 GRUB_LINUX_X64 = 'grubnetx64.efi.signed'
-FREEBSD_BOOT = 'pxeboot'
-PXEDIR = 'pxelinux.cfg'
 GRUBDIR = 'grub'
 namehelp = 'hostname (e.g., n04)'
 dtfmt = '%d/%m/%y'
@@ -74,8 +72,6 @@ class TmMsg(object):
         return '{}: invalid node'.format(node)
     def in_use(node, user):
         return '{}: in use by {}'.format(node, user)
-    def symlink_fail(node):
-        return '{}: failed to create symlink'.format(node)
     def success(node, ops):
         return '{}: {} success'.format(node, ops)
     def fail(node, cmd):
@@ -84,18 +80,14 @@ class TmMsg(object):
         return '{}'.format(d)
 
 class Tm(object):
-    def __init__(self, argv, dbfile=DBFILE, tftpboot=TFTPBOOT, pxedir=PXEDIR,
-            dhcpboot=DHCPBOOT, linux_boot=LINUX_BOOT, freebsd_boot=FREEBSD_BOOT,
-            filesystems=FILESYSTEMS, grubdir=GRUBDIR,
+    def __init__(self, argv, dbfile=DBFILE, tftpboot=TFTPBOOT,
+            dhcpboot=DHCPBOOT, filesystems=FILESYSTEMS, grubdir=GRUBDIR,
             test=False):
         self.output = ''
         self.tftpboot = tftpboot
         self.dhcpboot = dhcpboot
-        self.pxedir = pxedir
-        self.grubdir = grubdir
+        self.grubpath = Path(self.tftpboot)/grubdir
         self.filesystems = filesystems
-        self.linux_boot = linux_boot
-        self.freebsd_boot = freebsd_boot
         self.db = TinyDB(dbfile)
         self.ipmi_addr_off = 100
         self.addrs = ('mac', 'ip', 'ipmiaddr', 'ipmipass')
@@ -250,7 +242,7 @@ class Tm(object):
             if args.func == 'reserve':
                 if self.is_bootable(r):
                     if not self.reset_node(args.node, r['mac'], self.curuser):
-                        self.pr_msg(TmMsg.symlink_fail(args.node))
+                        self.pr_msg('{}: cannot create link'.format(args.node))
                         return
                 d['email'] = args.email
 
@@ -305,7 +297,6 @@ class Tm(object):
             lm('--misc', str,'func:args to retrieve info for non-regular '
                 'server (e.g., mlx_interfaces:mellanox2)')
             lm('--owner', str, 'Hardware owner (e.g., Michio Honda)')
-            lm('--boot', str, 'bios or uefi')
             p.add_argument('node', type=str, help=namehelp)
             p.set_defaults(func=cmd)
 
@@ -338,9 +329,6 @@ class Tm(object):
                     return
             else:
                 node = ans[0]
-            if args.boot and args.boot not in ('bios', 'uefi'):
-                    self.pr_msg('{}: must be bios or uefi'.format(args.node))
-                    return
             if args.mac and args.mac != '':
                 if not self.is_mac(args.mac):
                     self.pr_msg('{}: invalid MAC address'.format(args.node))
@@ -405,7 +393,7 @@ class Tm(object):
                 cls = list(set(ks))
 
                 reorders = ['node', 'mac', 'ip', 'ipmiaddr', 'ipmipass',
-                        'chassis', 'cpu', 'ram', 'nic', 'disk', 'boot',
+                        'chassis', 'cpu', 'ram', 'nic', 'disk',
                         'user', 'expire', 'email', 'owner']
                 for i, r in enumerate(reorders):
                     if r in cls:
@@ -453,9 +441,8 @@ class Tm(object):
                         print(msg.format(node['ipmiaddr'], 'unreachable'))
 
                     # test loader
-                    loaderpath = Path(self.dhcpboot)/self.pxedir
-                    cmd = 'ls {}'.format(loaderpath)
-                    msg = node['node'] + ': loader {} {} in ' + str(loaderpath)
+                    cmd = 'ls {}'.format(self.grubpath)
+                    msg = node['node'] + ': loader {} {} in ' + str(self.grubpath)
                     try:
                         res = subprocess.check_output(split(cmd))
                     except(subprocess.CalledProcessError) as e:
@@ -463,7 +450,7 @@ class Tm(object):
                         return
                     files = []
                     for f in res.decode().split('\n')[0:-1]:
-                        files.append(f.lstrip('01-').replace('-', ':'))
+                        files.append(f)
                     print(msg.format(node['mac'],
                         'found' if node['mac'] in files else 'not found'))
 
@@ -488,7 +475,8 @@ class Tm(object):
                                 print(m.format(name, node['ip'], ip))
                             break
                     else:
-                        self.pr_msg('{}: not in /etc/dnsmasq.conf'.format(node['node']))
+                        self.pr_msg('{}: not in /etc/dnsmasq.conf'.format(
+                            node['node']))
 
     def power(self, argv):
         parser = ArgumentParser(description="tm-power - power management",
@@ -754,26 +742,15 @@ class Tm(object):
         return self.get_addrs_dict(r)
 
     def is_mac(self, mac):
-        l = mac.split(':')
-        if len(l) != 6:
-            return False
-        for i in l:
-            if len(i) != 2:
-                return False
-            if not match(r'[0-9a-f][0-9a-f]', i):
-                return False
-        return True
+        c = re.compile('^(?:[0-9a-f]{2}[:-]){5}(?:[0-9a-f]{2})$')
+        return True if c.match(mac) else False
 
     def is_ipaddr(self, ip):
-        l = ip.split('.')
-        if len(l) != 4:
+        try:
+            IPv4Address(ip)
+            return True
+        except:
             return False
-        for i in l:
-            if not i.isdigit():
-                return False
-            elif int(i) > 255:
-                return False
-        return True
 
     def is_ipmipass(self, userpass):
         l = userpass.split(',')
@@ -807,28 +784,14 @@ class Tm(object):
             return False
 
     def reset_node(self, node, mac, user):
-        # set the boot loader
-        if self.get_boot(node) == 'uefi':
-            boot = GRUB_LINUX_AA64 if self.get_aa64(node) else GRUB_LINUX_X64
-            p = Path(self.tftpboot)/self.grubdir/mac
-        else:
-            boot = self.linux_boot
-            p = Path(self.dhcpboot)/self.pxedir/( '01-'+mac.replace(':', '-'))
+        boot = GRUB_LINUX_AA64 if self.get_aa64(node) else GRUB_LINUX_X64
         self.set_link(boot, Path(self.dhcpboot)/node) # XXX ignore error
-        # set the user configuration
-        return self.set_link(Path('../')/'loaders'/user/node, p)
+        return self.set_link(Path('../')/'loaders'/user/node, self.grubpath/mac)
 
     def is_bootable(self, ne):
-        if not all(e in ne for e in
-                ('boot', 'mac', 'ip', 'ipmiaddr', 'ipmipass')):
+        if not all(e in ne for e in ('mac', 'ip', 'ipmiaddr', 'ipmipass')):
             return False
-        mac = ne['mac']
-        for d in (
-          Path(self.dhcpboot)/Path(self.pxedir)/( '01-'+mac.replace(':', '-')),
-          Path(self.tftpboot)/Path(self.grubdir)/(mac)):
-            if self.islink(d):
-                return True
-        return False
+        return True if self.islink(self.grubpath/(ne['mac'])) else False
 
     def do_release(self, node, now):
         if 'history' in node:
@@ -889,10 +852,6 @@ class Tm(object):
     def get_aa64(self, node):
         r = self.db.get(Query().node == node)
         return True if re.search('Neoverse', r['cpu']) else False
-
-    def get_boot(self, node):
-        r = self.db.get(Query().node == node)
-        return r['boot']
 
     def pr_msg(self, msg):
         self.output = msg
