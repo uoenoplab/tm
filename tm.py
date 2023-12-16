@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.8
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 # Copyright (C) 2020 Michio Honda.  All rights reserved.
@@ -30,6 +30,7 @@
 from argparse import ArgumentParser
 import sys
 import os
+import platform
 import pyipmi
 import pyipmi.interfaces
 import socket
@@ -83,6 +84,7 @@ class Tm(object):
     def __init__(self, argv, dbfile=DBFILE, tftpboot=TFTPBOOT,
             dhcpboot=DHCPBOOT, filesystems=FILESYSTEMS, grubdir=GRUBDIR,
             test=False):
+        self.os = platform.system()
         self.output = ''
         self.tftpboot = tftpboot
         self.dhcpboot = dhcpboot
@@ -169,7 +171,7 @@ class Tm(object):
                 if not 'user' in v:
                     continue
                 if (args.noexpire or now.date()
-                        > datetime.strptime(v['expire'], dtfmt).date()):
+                        >= datetime.strptime(v['expire'], dtfmt).date()):
                     self.do_release(v, now)
             return
 
@@ -390,17 +392,10 @@ class Tm(object):
 
                 dics = sorted(ans, key=itemgetter('node'))
                 ks = [i for s in [list(d.keys()) for d in dics] for i in s]
-                cls = list(set(ks))
-
                 reorders = ['node', 'mac', 'ip', 'ipmiaddr', 'ipmipass',
                         'chassis', 'cpu', 'ram', 'nic', 'disk',
                         'user', 'expire', 'email', 'owner']
-                for i, r in enumerate(reorders):
-                    if r in cls:
-                        cls.remove(r)
-                        cls.insert(i, r)
-                cls = cls[:i+1]
-
+                cls = [i for i in reorders if i in list(set(ks))]
                 for a in ('addrs', 'devices', 'reservations'):
                     if not getattr(args, a):
                         cls = [c for c in cls if c not in getattr(self, a)]
@@ -605,10 +600,11 @@ class Tm(object):
             return
 
         # replace initrd-imgs, kernels and filesystem the loaders point to
-        c1 = 'for l in `ls {}` ; do sed -i "s/base/{}/g" {}/$l; done'.format(
-            p/user, user, p/user)
-        c2 = 'for l in `ls {}` ; do sed -i "s/ ro / rw /g" {}/$l; done'.format(
-            p/user, p/user)
+        sed = 'sed' if self.os == 'Linux' else 'gsed'
+        c1 = 'for l in `ls {}` ; do {} -i "s/base/{}/g" {}/$l; done'.format(
+            p/user, sed, user, p/user)
+        c2 = 'for l in `ls {}` ; do {} -i "s/ ro / rw /g" {}/$l; done'.format(
+            p/user, sed, p/user)
         for c in (c1, c2):
             r = subprocess.run(c, shell=True)
             if r.returncode != 0:
