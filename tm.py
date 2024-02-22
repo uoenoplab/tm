@@ -630,7 +630,10 @@ class Tm(object):
             self.run(cmd + ' {}:{} {}'.format(user, user, p/user))
 
         # create the file system
-        self.newfilesystem(user, self.fsversion, self.fsversion)
+        p = Path(self.filesystems)
+        cmd = 'tar xpf {}.tar.gz -C {}'.format(p/'base'/self.fsversion, p/user)
+        self.run(cmd)
+        self.run('chown {}:{} {}'.format(user, user, p/user/self.fsversion))
         self.pr_msg(TmMsg.success('user', 'add'))
 
     # sudo from any user
@@ -643,23 +646,29 @@ class Tm(object):
                 description="tm-filesystem - filesystem operation",
                 usage='sudo tm filesystem COMMAND [<args>]')
         subparsers = parser.add_subparsers(title='COMMAND')
-        for cmd in ('clone', 'new', 'delete', 'archive'):
+        src = 'src'
+        dst = 'dst'
+        fslst = []
+        fp = Path(self.filesystems)
+        for cmd in ('clone', 'new', 'delete', 'archive', 'restore'):
             p = subparsers.add_parser(cmd,
                     usage='tm filesystem {}'.format(cmd))
-            if cmd == 'new':
-                p.add_argument('--dst', type=str, help='new filesystem name')
-                p.usage += ' {}'.format('<new filesystem>')
-                p.add_argument('--src', type=str,
-                        help='filesystem tarball in {}'.format(
-                            self.filesystems + '/base'))
-                p.usage += ' {}'.format('<filesystem tarball (without extension)>')
-            if cmd in ('clone', 'delete', 'archive'):
-                p.add_argument('src', type=str,
-                        help='filesystem name in {}/{}'.format(
-                            self.filesystems, u))
-            if cmd == 'clone':
-                p.add_argument('dst', type=str, help='new filesystem name')
-                p.usage += ' {}'.format('<new filesystem>')
+            if cmd in ('new', 'clone', 'delete', 'archive', 'restore'):
+                if cmd == 'restore':
+                    h = 'archived filesystem path (.tar.gz)'
+                elif cmd == 'new':
+                    h = 'image in {}: '.format(fp/'base')
+                    fslst = [str(x.name) for x in (fp/'base').iterdir()
+                            if re.search('.tar.gz$', str(x))]
+                    h += ' '.join(fslst)
+                else:
+                    h = 'name in {}'.format(fp/u)
+                p.add_argument(src, type=str, help=h)
+                p.usage += ' {}'.format(src)
+
+            if cmd in ('new', 'clone', 'restore'):
+                p.add_argument(dst, type=str, help='name in {}'.format(fp/u))
+                p.usage += ' {}'.format(dst)
 
             p.usage += ' {}'.format('[-h|--help]')
             p.set_defaults(func=cmd)
@@ -667,9 +676,34 @@ class Tm(object):
         if not hasattr(args, 'func'): # XXX
             parser.print_help()
             return
-        for p in [p for p in ('src', 'dst') if p in args]:
-            if search('/', str(getattr(args, p))):
-                self.pr_msg('provide a filesystem name only (no full path)')
+
+        # validate src
+        srcp = None
+        if args.func == 'new':
+            if args.src not in fslst:
+                self.pr_msg("{} is not available".format(args.src))
+                return
+            srcp = fp/'base'/args.src
+        elif args.func == 'restore':
+            srcp = Path(args.src)
+        else:
+            srcp = fp/u/args.src
+        if not srcp.exists():
+            self.pr_msg("{} doesn't exist".format(srcp))
+            return
+
+        # validate dst
+        dstp = None
+        if args.func in ('new', 'clone', 'restore', 'archive'):
+            if args.func == 'archive':
+                dstp = Path(str(srcp)+'.tar.gz')
+            else:
+                if '/' in args.dst:
+                    self.pr_msg('provide the name only (no full path)')
+                    return
+                dstp = fp/u/args.dst
+            if dstp.exists():
+                self.pr_msg("{} already exists".format(dstp))
                 return
 
         if self.sudo_user is None:
@@ -677,38 +711,22 @@ class Tm(object):
             return
         u = self.sudo_user
 
-        if args.func == 'new':
-            src = args.src if args.src else self.fsversion
-            self.newfilesystem(u, src, args.dst if args.dst else src)
-            return
-
-        path = Path(self.filesystems)/u
-        s = path/args.src.strip('/')
-        d = ''
-        if not s.exists():
-            self.pr_msg('{} does not exist'.format(s))
-            return
         if args.func == 'delete':
-            cmd = 'rm -rf {}'.format(path/args.src)
+            cmd = 'rm -rf {}'.format(srcp)
         elif args.func == 'clone':
-            d = path/args.dst
-            if d.exists():
-                self.pr_msg('{} exists'.format(d))
-                return
-            cmd = 'cp -Rp {} {}'.format(path/args.src, path/args.dst)
+            cmd = 'cp -Rp {} {}'.format(srcp, dstp)
         elif args.func == 'archive':
-            d = path/(args.src + '.tar.xz')
-            if d.exists():
-                self.pr_msg('{} exists'.format(d))
-                return
-            cmd = 'tar cJpf {} -C {} {}'.format(d, path, args.src)
-        print(cmd)
-        self.run(cmd)
-        if args.func == 'clone' or args.func == 'archive':
-            cmd = 'chown {}:{} {}'.format(
-                    self.sudo_user, self.sudo_user, d)
+            cmd = 'tar -acpf {} -C {} {}'.format(dstp, srcp.parent, srcp.name)
+        elif args.func == 'restore' or args.func == 'new':
+            cmd = 'mkdir {}'.format(dstp)
             print(cmd)
             self.run(cmd)
+            cmd = 'tar xpf {} -C {} --strip-components 1'.format(srcp, dstp)
+        print(cmd)
+        self.run(cmd)
+        cmd = 'chown {}:{} {}'.format(self.sudo_user, self.sudo_user, dstp)
+        print(cmd)
+        self.run(cmd)
 
     def owner_or_root(self, node, needuser=True):
         r = self.db.get(Query().node == node)
@@ -809,26 +827,6 @@ class Tm(object):
         for e in ['user', 'expire', 'email']:
             self.db.update(delete(e), Query().node == node['node'])
 
-    def newfilesystem(self, user, src, dst):
-        path = Path(self.filesystems)
-        s = path/'base/{}.tar.gz'.format(src)
-        if not s.exists():
-            self.pr_msg('{} does not exist'.format(s))
-            return
-        d = path/user/dst
-        if d.exists():
-            self.pr_msg('{} exists'.format(d))
-
-        cmd = 'tar xzpf {}.tar.gz -C {}'.format(path/'base'/src, path/user)
-        if dst != src:
-            precmd = 'mkdir {}'.format(path/user/dst)
-            print(precmd)
-            self.run(precmd)
-            cmd += '/{} --strip-components 1'.format(dst)
-        print(cmd)
-        self.run(cmd)
-        self.run('chown {}:{} {}'.format(user, user, path/user/dst))
-
     def get_db_from_user(self, user):
         res = [self.db.get(Query().user == user)]
         return None if res[0] is None else res
@@ -843,6 +841,10 @@ class Tm(object):
     def get_ipmi_cred(self, node):
         r = self.db.get(Query().node == node)
         return r['ipmipass'].split(',')
+
+    @staticmethod
+    def get_filesystems(path):
+        return [x for x in path.iterdir() if re.search('.tar.gz$', str(x))]
 
     # XXX
     def get_aa64(self, node):
