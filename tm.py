@@ -879,11 +879,12 @@ class Tm(object):
             cols = re.split(' ', i)
             if not search(':', cols[5]):
                 continue
+            trail = '0' if cols[0].count('/') == 1 else ''
             l.append({
               'interface': cols[0], 'status': cols[1], 'speed': cols[3],
               'node': cols[5].split(':')[0], 'ifname': cols[5].split(':')[1],
               'ipaddr': '192.168.11.'+cols[0].replace('Eth1/', '').replace('/',
-                    '') + '/24'
+                    '') + trail + '/24'
                 })
         return l
 
