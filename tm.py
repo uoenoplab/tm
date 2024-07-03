@@ -394,7 +394,7 @@ class Tm(object):
                 ks = [i for s in [list(d.keys()) for d in dics] for i in s]
                 reorders = ['node', 'mac', 'ip', 'ipmiaddr', 'ipmipass',
                         'chassis', 'cpu', 'ram', 'nic', 'disk',
-                        'user', 'expire', 'email', 'owner']
+                        'user', 'expire', 'email', 'owner', 'note']
                 cls = [i for i in reorders if i in list(set(ks))]
                 for a in ('addrs', 'devices', 'reservations'):
                     if not getattr(args, a):
