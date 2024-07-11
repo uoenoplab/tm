@@ -61,6 +61,7 @@ dtfmt = '%d/%m/%y'
 MAXDAYS = 7
 KERNELVERSION = '5.15.0-25-generic'
 FSVERSION = 'jammy'
+NETWORKNODE = 's01'
 
 class TmMsg(object):
     def empty_db():
@@ -109,7 +110,7 @@ class Tm(object):
                 usage='tm [-h] COMMAND <args>')
         parser.add_argument('command', metavar='COMMAND',
                 choices=['inventory', 'power', 'console', 'reservation', 'user',
-                    'filesystem'],
+                    'filesystem', 'network'],
                 help='{inventory|power|console|reservation|user|filesystem}')
         args = parser.parse_args(argv[1:2])
         getattr(self, args.command)(argv)
@@ -259,6 +260,32 @@ class Tm(object):
                 return
             self.do_release(r, now)
         self.pr_msg(TmMsg.success(args.node, args.func))
+
+    def network(self, argv):
+        parser = ArgumentParser(description="tm-net - "
+            "experimental network interface helper", usage='tm network COMMAND [<args>]')
+        subparsers = parser.add_subparsers(title='COMMAND')
+        for cmd in ('show',):
+            p = subparsers.add_parser(cmd,
+                    usage='tm network {} [<args>]'.format(cmd))
+            if cmd == 'show':
+                p.add_argument('--node', type=str, help='--node NODE')
+            p.set_defaults(func=cmd)
+        args = parser.parse_args(argv[2:])
+        if not hasattr(args, 'func'):
+            parser.print_help()
+            return
+
+        ans = self.get_db(node=NETWORKNODE)[0]
+        if not 'misc' in ans:
+            self.pr_msg('{} does not have network information'.format(NETWORKNODE))
+            return
+        for i in ans['misc']:
+            if args.node is not None:
+                if i['node'] != args.node:
+                    continue
+            print(i)
+        return
 
     def inventory(self, argv):
         parser = ArgumentParser(description="tm-inventory - "
