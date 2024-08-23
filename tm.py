@@ -453,13 +453,10 @@ class Tm(object):
                             self.def_ipmi_addr(addr), node['ipmiaddr']))
 
                     # test ipmi
-                    cmd = 'ping -c 2 {}'.format(node['ipmiaddr'])
                     msg = node['node'] + ': IPMI {} {}'
-                    try:
-                        subprocess.call(split(cmd),
-                                stdout=subprocess.DEVNULL)
+                    if is_reachable(node['ipmiaddr']):
                         print(msg.format(node['ipmiaddr'], 'reachable'))
-                    except(OSError):
+                    else:
                         print(msg.format(node['ipmiaddr'], 'unreachable'))
 
                     # test loader
@@ -515,6 +512,9 @@ class Tm(object):
         addr = self.get_addrs(args.node)[1]
         if not addr:
             self.pr_msg(TmMsg.not_in_inventory(args.node))
+            return
+        if not self.is_reachable(addr):
+            self.pr_msg('{}: IPMI address unreachable'.format(args.node))
             return
         interface = pyipmi.interfaces.create_interface('ipmitool',
                 interface_type='lanplus')
@@ -880,6 +880,16 @@ class Tm(object):
 
     def pr_msg(self, msg):
         self.output = msg
+
+    @staticmethod
+    def is_reachable(addr):
+        cmd = 'ping -W 0.1 -c 2 {}'.format(addr)
+        try:
+            ret = subprocess.call(split(cmd), stdout=subprocess.DEVNULL)
+            return True if ret == 0 else False
+        except(OSError):
+            print('OSError')
+            return False
 
     @staticmethod
     def mlnx_interfaces(name):
