@@ -135,9 +135,6 @@ class Tm(object):
             if cmd == 'reserve' or cmd == 'update':
                 p.add_argument('expire', type=str, help='dd/mm/yy')
                 p.usage += ' {}'.format('<expire>')
-                if cmd == 'reserve':
-                    p.add_argument('email', type=str, help='email address')
-                    p.usage += ' {}'.format('<email>')
             elif cmd == 'history':
                 p.add_argument('--trim', type=str,
                         help='number of days to keep the history')
@@ -158,8 +155,14 @@ class Tm(object):
                         if args.node else TmMsg.empty_db())
                 return
             dics = sorted(ans, key=itemgetter('node'))
+            # Add extra info
+            for d in dics:
+                if 'user' in d:
+                    d['email'] = self.get_email(d['user'])
+
             cls = ('node', 'user', 'expire', 'email')
             newdics = [{k: d[k] for k in cls if k in d} for d in dics]
+            print(newdics)
             self.pr_msg(tabulate(newdics, headers='keys'))
             return
 
@@ -218,11 +221,6 @@ class Tm(object):
                 elif self.curuser == 'root':
                     self.pr_msg('root cannot reserve nodes')
                     return
-                rc = compile(
-                        r"^[A-Za-z0-9\.\+_-]+@[A-Za-z0-9\._-]+\.[a-zA-Z]*$")
-                if not match(rc, args.email):
-                    self.pr_msg('{}: invalid email address'.format(args.email))
-                    return
             elif args.func == 'update':
                 if not self.owner_or_root(args.node):
                     return
@@ -247,8 +245,6 @@ class Tm(object):
                     if not self.reset_node(args.node, r['mac'], self.curuser):
                         self.pr_msg('{}: cannot create link'.format(args.node))
                         return
-                d['email'] = args.email
-
                 # create or append to the history
                 h = r['history'] if 'history' in r else []
                 h.append((self.curuser, now.isoformat(), ''))
@@ -418,6 +414,11 @@ class Tm(object):
                     return
 
                 dics = sorted(ans, key=itemgetter('node'))
+                # Add extra info
+                for d in dics:
+                    if 'user' in d:
+                        d['email'] = self.get_email(d['user'])
+
                 ks = [i for s in [list(d.keys()) for d in dics] for i in s]
                 reorders = ['node', 'mac', 'ip', 'ipmiaddr', 'ipmipass',
                         'chassis', 'cpu', 'ram', 'nic', 'disk',
@@ -852,7 +853,11 @@ class Tm(object):
                     node['mac']))
 
         for e in ['user', 'expire', 'email']:
-            self.db.update(delete(e), Query().node == node['node'])
+            try:
+                self.db.update(delete(e), Query().node == node['node'])
+            except(KeyError):
+                if e == 'email': # new version doesn't record email
+                    pass
 
     def get_db_from_user(self, user):
         res = [self.db.get(Query().user == user)]
@@ -890,6 +895,19 @@ class Tm(object):
         except(OSError):
             print('OSError')
             return False
+
+    @staticmethod
+    def get_email(name):
+        try:
+            with open('/etc/passwd', 'r') as f:
+                for l in f:
+                    l1 = l.split(':')
+                    if l1[0] == name:
+                        l2 = l1[4].split(',')
+                        return l2[4]
+            return None
+        except FileNotFoundError:
+            return None
 
     @staticmethod
     def mlnx_interfaces(name):
