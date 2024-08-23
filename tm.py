@@ -797,7 +797,7 @@ class Tm(object):
         l = userpass.split(',')
         if len(l) != 2:
             return False
-        elif len(l[0]) > 8 or len(l[1]) > 8:
+        elif len(l[0]) > 8 or len(l[1]) > 12:
             return False
         return True
 
