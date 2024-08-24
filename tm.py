@@ -502,8 +502,8 @@ class Tm(object):
         parser = ArgumentParser(description="tm-power - power management",
                     usage='tm power COMMAND <node>')
         parser.add_argument('command', metavar='COMMAND', type=str,
-        choices=['status', 'poweron', 'poweroff', 'restart'],
-                help='{status|poweron|poweroff|restart}')
+        choices=['status', 'poweron', 'poweroff', 'restart', 'reset'],
+                help='{status|poweron|poweroff|restart|reset}')
         parser.add_argument('node', type=str, help=namehelp)
         args = parser.parse_args(argv[2:])
 
@@ -540,6 +540,12 @@ class Tm(object):
                     r = ipmi.chassis_control_power_cycle()
                 except(pyipmi.errors.CompletionCodeError):
                     self.pr_msg('{}: cannot restart, power might be off'.format(
+                        args.node))
+            elif args.command == 'reset':
+                try:
+                    r = ipmi.chassis_control_hard_reset()
+                except(pyipmi.errors.CompletionCodeError):
+                    self.pr_msg('{}: cannot hard reset, power might be off'.format(
                         args.node))
         except(RuntimeError):
             pass
