@@ -162,7 +162,6 @@ class Tm(object):
 
             cls = ('node', 'user', 'expire', 'email')
             newdics = [{k: d[k] for k in cls if k in d} for d in dics]
-            print(newdics)
             self.pr_msg(tabulate(newdics, headers='keys'))
             return
 
