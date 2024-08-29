@@ -524,33 +524,27 @@ class Tm(object):
         ipmi.session.establish()
         r = None
 
-        # Dell and Supermicro default user/pass
         userpass = self.get_ipmi_cred(args.node)
         ipmi.session.set_auth_type_user(userpass[0], userpass[1])
         try:
             if args.command == 'status':
                 r = ipmi.get_chassis_status()
-            elif args.command == 'poweroff':
-                r = ipmi.chassis_control_power_down()
-            elif args.command == 'poweron':
-                r = ipmi.chassis_control_power_up()
-            elif args.command == 'restart':
-                try:
-                    r = ipmi.chassis_control_power_cycle()
-                except(pyipmi.errors.CompletionCodeError):
-                    self.pr_msg('{}: cannot restart, power might be off'.format(
+                self.pr_msg('poweron' if r.__dict__['power_on'] else 'poweroff')
+            else:
+                d = {k: v for v, k in
+                    enumerate(['poweroff', 'poweron', 'restart', 'reset'])}
+                if not ipmi.chassis_control(d[args.command]):
+                    self.pr_msg('{}: {} success'.format(
+                        args.node, args.command))
+        except(pyipmi.errors.CompletionCodeError):
+            if args.command == 'restart' or args.command == 'reset':
+                self.pr_msg('{}: cannot restart, power might be off'.format(
                         args.node))
-            elif args.command == 'reset':
-                try:
-                    r = ipmi.chassis_control_hard_reset()
-                except(pyipmi.errors.CompletionCodeError):
-                    self.pr_msg('{}: cannot hard reset, power might be off'.format(
-                        args.node))
+            else:
+                print('CompletionCodeError')
         except(RuntimeError):
-            pass
+            print('Runtime error')
         ipmi.session.close()
-        if r:
-            self.pr_msg('poweron' if r.__dict__['power_on'] else 'poweroff')
 
     def console(self, argv):
         parser = ArgumentParser(description="tm-console - access console.",
@@ -893,13 +887,17 @@ class Tm(object):
 
     @staticmethod
     def is_reachable(addr):
-        cmd = 'ping -W 0.1 -c 2 {}'.format(addr)
-        try:
-            ret = subprocess.call(split(cmd), stdout=subprocess.DEVNULL)
-            return True if ret == 0 else False
-        except(OSError):
-            print('OSError')
-            return False
+        cmd = 'ping -c 1 {}'.format(addr)
+        retry = 2
+        while retry:
+            retry -= 1
+            try:
+                ret = subprocess.call(split(cmd), stdout=subprocess.DEVNULL)
+                if ret == 0:
+                    return True
+            except(OSError):
+                print('OSError')
+        return False
 
     @staticmethod
     def get_email(name):
