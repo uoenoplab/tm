@@ -37,6 +37,7 @@ import socket
 import paramiko
 import json
 import subprocess
+import shlex
 from shlex import split
 from tinydb import TinyDB, Query, where
 from tinydb.operations import delete
@@ -46,7 +47,7 @@ from datetime import datetime, timedelta
 import getpass
 from pathlib import Path
 import re
-from re import match, compile, search, sub
+from re import search, sub
 from ipaddress import IPv4Address
 
 DBFILE = '/usr/local/tm/tmdb.json'
@@ -569,7 +570,8 @@ class Tm(object):
         parser = ArgumentParser(description="tm-user - user management",
                     usage='tm user COMMAND <user>')
         parser.add_argument('command', metavar='COMMAND', type=str,
-                            choices=['add', 'delete'], help='{add|delete}')
+                            choices=['add', 'delete', 'reset'],
+                            help='{add|delete|reset}')
         parser.add_argument('user', type=str, help='user name')
         args = parser.parse_args(argv[2:])
         user = args.user
@@ -604,64 +606,38 @@ class Tm(object):
             self.pr_msg('run: sudo {}'.format(cmdstr))
             return
 
-        for p in dirs:
-            d = Path(self.tftpboot)/p/user
-            if d.exists():
-                self.pr_msg('{} exists'.format(d))
-                return
+        if not args.command == 'reset':
+            # make sure no leftovers
+            for p in dirs:
+                d = Path(self.tftpboot)/p/user
+                if d.exists():
+                    self.pr_msg('{} exists'.format(d))
+                    return
 
-        # create homes
-        for p in dirs:
-            c = 'mkdir -m 755 {}'.format(Path(self.tftpboot)/p/user)
-            r = self.run(c)
-            if r.returncode != 0:
-                self.pr_msg('error in {}'.format(c))
-                return
+            # create homes
+            for p in dirs:
+                d = Path(self.tftpboot)/p/user
+                c = 'mkdir -m 755 {}'.format(d)
+                r = self.run(c)
+                if r.returncode != 0:
+                    self.pr_msg('error in {}'.format(c))
+                    return
+                r = self.run('chown {}:{} {}'.format(user, user, d))
 
-        # copy loaders
-        p = Path(self.tftpboot)/'loaders'
-        c = 'cp {} {}'.format(p/'base'/'*', p/user)
-        r = subprocess.run(c, shell=True)
-        if r.returncode != 0:
-            self.pr_msg('error in {}'.format(c))
-            return
+            # create the file system
+            p = Path(self.filesystems)
+            ud = p/user
+            cmd = 'tar xpf {}.tar.gz -C {}'.format(p/'base'/self.fsversion, ud)
+            self.run(cmd)
+            self.run('chown {}:{} {}'.format(user, user, ud/self.fsversion))
+            self.pr_msg(TmMsg.success('user', 'add'))
 
-        # replace initrd-imgs, kernels and filesystem the loaders point to
-        sed = 'sed' if self.os == 'Linux' else 'gsed'
-        c1 = 'for l in `ls {}` ; do {} -i "s/base/{}/g" {}/$l; done'.format(
-            p/user, sed, user, p/user)
-        c2 = 'for l in `ls {}` ; do {} -i "s/ ro / rw /g" {}/$l; done'.format(
-            p/user, sed, p/user)
-        for c in (c1, c2):
-            r = subprocess.run(c, shell=True)
-            if r.returncode != 0:
-                self.pr_msg('error in {}'.format(cmd))
-                return
+        if args.command == 'reset':
+            p = Path(self.tftpboot)/'loaders/'/user
+            subprocess.run('rm -rf {}/n* {}/default {}/default.arm64'.format(
+                p, p, p), shell=True)
 
-        # copy the base initrd-img, kernel and file system
-        for o in (('initrd-imgs', 'initrd.img'), ('kernels', 'vmlinuz')):
-            p = Path(self.tftpboot)/o[0]
-            c = 'cp {} {}'.format(p/'base'/'{}-{}'.format(o[1],
-                self.kernelversion), p/user)
-            r = self.run(c)
-            if r.returncode != 0:
-                self.pr_msg('error in {}'.format(c))
-                return
-
-        # fix permission
-        for d in dirs:
-            p = Path(self.tftpboot)/d
-            cmd = 'chown'
-            if d != 'filesystems':
-                cmd += ' -R'
-            self.run(cmd + ' {}:{} {}'.format(user, user, p/user))
-
-        # create the file system
-        p = Path(self.filesystems)
-        cmd = 'tar xpf {}.tar.gz -C {}'.format(p/'base'/self.fsversion, p/user)
-        self.run(cmd)
-        self.run('chown {}:{} {}'.format(user, user, p/user/self.fsversion))
-        self.pr_msg(TmMsg.success('user', 'add'))
+        self.init_loaders(user)
 
     # sudo from any user
     # %bar    ALL=(ALL) NOPASSWD: tm filesystem *
@@ -857,6 +833,33 @@ class Tm(object):
             except(KeyError):
                 if e == 'email': # new version doesn't record email
                     pass
+
+    def init_loaders(self, user):
+        def setdirids(d):
+            st = os.stat(d)
+            os.setgid(st.st_gid)
+            os.setuid(st.st_uid)
+        # copy the configuration files
+        p = Path(self.tftpboot)/'loaders'
+        d = p/'base'
+        sed = 'sed' if self.os == 'Linux' else 'gsed'
+        for i in ('default', 'default.arm64'):
+            c = 'cp {} {}'.format(d/i, p/user)
+            r = subprocess.run(split(c), preexec_fn=setdirids(p/user))
+            if r.returncode != 0:
+                self.pr_msg('error in {}'.format(c))
+                return False
+            # make it writable
+            c1 = '{} -i "s/{}/{}/g" {}'.format(sed, '\${roparm} ', '', p/user/i)
+            # point to own images
+            c2 = '{} -i "s@{}@{}@g" {}'.format(sed, 'filesystems/base',
+                    'filesystems/{}'.format(user), p/user/i)
+            for c in (c1, c2):
+                r = subprocess.run(split(c))
+        for i in d.iterdir():
+            if re.match(r'^n\d{2}$', i.name) and i.is_symlink(): # XXX
+                c = 'ln -sf {} {}'.format(i.readlink(), i.name)
+                subprocess.run(split(c), cwd=p/user, stdout=subprocess.DEVNULL)
 
     def get_db_from_user(self, user):
         res = [self.db.get(Query().user == user)]
