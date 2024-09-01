@@ -287,12 +287,11 @@ class Tm(object):
         parser = ArgumentParser(description="tm-inventory - "
             "node metadata management", usage='tm inventory COMMAND [<args>]')
         subparsers = parser.add_subparsers(title='COMMAND')
-
-        for cmd in ('show', 'test'):
+        for cmd in ('add', 'update', 'delete', 'show'):
             p = subparsers.add_parser(cmd,
-                    usage='tm inventory {} [<args>]'.format(cmd))
-            p.add_argument('--node', type=str, help=namehelp)
+                    usage='tm inventory {} [<args>] <node>'.format(cmd))
             if cmd == 'show':
+                p.add_argument('--node', type=str, help=namehelp)
                 p.add_argument('--addrs', action='store_true',
                         help='management addresses') 
                 p.add_argument('--devices', action='store_true',
@@ -300,29 +299,24 @@ class Tm(object):
                 p.add_argument('--reservations', action='store_true',
                         help='reservations') 
                 p.add_argument('--misc', type=str, help='--misc NODE')
-            p.set_defaults(func=cmd)
-        del_parser = subparsers.add_parser('delete')
-        del_parser.add_argument('node', type=str, help=namehelp)
-        del_parser.set_defaults(func='delete')
-
-        for cmd in ('add', 'update'):
-            p = subparsers.add_parser(cmd,
-                    usage='tm inventory {} [<args>] <node>'.format(cmd))
-            lm = lambda o, t, h: p.add_argument(o, type=t, help=h)
-            lm('--mac', str, 'MAC addr (e.g., 00:00:00:00:00:00)')
-            lm('--ip', str, 'IPv4 addr (e.g., 192.168.0.2)')
-            lm('--ipmipass', str, 'IPMI user,pass (e.g., ADMIN,ADMIN)')
-            lm('--cpu', str, 'CPU (e.g., Xeon E3-1220v3)')
-            lm('--ram', int, 'RAM in GB (e.g., 64)')
-            lm('--nic', str, '(non-boot) NIC (e.g., Intel X520-SR2)')
-            lm('--disk', str, 'Disk (e.g., Samsung Evo 870 256GB)')
-            lm('--note', str, 'Note (e.g., PCIe slot 1 is broken)')
-            lm('--ipmiaddr', str, 'IPMI address (e.g., if not ip+100)')
-            lm('--chassis', str, 'Chassis (e.g., SMC 6029P-TRT)')
-            lm('--misc', str,'func:args to retrieve info for non-regular '
-                'server (e.g., mlx_interfaces:mellanox2)')
-            lm('--owner', str, 'Hardware owner (e.g., Michio Honda)')
-            p.add_argument('node', type=str, help=namehelp)
+            elif cmd == 'delete':
+                p.add_argument('node', type=str, help=namehelp)
+            else:
+                lm = lambda o, t, h: p.add_argument(o, type=t, help=h)
+                lm('--mac', str, 'MAC addr (e.g., 00:00:00:00:00:00)')
+                lm('--ip', str, 'IPv4 addr (e.g., 192.168.0.2)')
+                lm('--ipmipass', str, 'IPMI user,pass (e.g., ADMIN,ADMIN)')
+                lm('--cpu', str, 'CPU (e.g., Xeon E3-1220v3)')
+                lm('--ram', int, 'RAM in GB (e.g., 64)')
+                lm('--nic', str, '(non-boot) NIC (e.g., Intel X520-SR2)')
+                lm('--disk', str, 'Disk (e.g., Samsung Evo 870 256GB)')
+                lm('--note', str, 'Note (e.g., PCIe slot 1 is broken)')
+                lm('--ipmiaddr', str, 'IPMI address (e.g., if not ip+100)')
+                lm('--chassis', str, 'Chassis (e.g., SMC 6029P-TRT)')
+                lm('--misc', str,'func:args to retrieve info for non-regular '
+                    'server (e.g., mlx_interfaces:mellanox2)')
+                lm('--owner', str, 'Hardware owner (e.g., Michio Honda)')
+                p.add_argument('node', type=str, help=namehelp)
             p.set_defaults(func=cmd)
 
         args = parser.parse_args(argv[2:])
@@ -402,101 +396,34 @@ class Tm(object):
 
             self.pr_msg(TmMsg.success(args.node, args.func))
 
-        elif args.func == 'show' or args.func == 'test':
+        elif args.func == 'show':
             if ans is None:
                 self.pr_msg(TmMsg.not_in_inventory(args.node) if args.node
                         else TmMsg.empty_db())
-            elif args.func == 'show':
-                if args.misc:
-                    # misc always has node
-                    self.pr_msg(ans[0]['misc'] if 'misc' in ans[0]
-                        else '{} no entry'.format(args.node))
-                    return
+            if args.misc:
+                # misc always has node
+                self.pr_msg(ans[0]['misc'] if 'misc' in ans[0]
+                    else '{} no entry'.format(args.node))
+                return
 
-                dics = sorted(ans, key=itemgetter('node'))
-                # Add extra info
-                for d in dics:
-                    if 'user' in d:
-                        d['email'] = self.get_email(d['user'])
+            dics = sorted(ans, key=itemgetter('node'))
+            # Add extra info
+            for d in dics:
+                if 'user' in d:
+                    d['email'] = self.get_email(d['user'])
 
-                ks = [i for s in [list(d.keys()) for d in dics] for i in s]
-                reorders = ['node', 'mac', 'ip', 'ipmiaddr', 'ipmipass',
-                        'chassis', 'cpu', 'ram', 'nic', 'disk',
-                        'user', 'expire', 'email', 'owner', 'note']
-                cls = [i for i in reorders if i in list(set(ks))]
-                for a in ('addrs', 'devices', 'reservations'):
-                    if not getattr(args, a):
-                        cls = [c for c in cls if c not in getattr(self, a)]
-                newdics = []
-                for d in dics:
-                    newdics.append({k: d[k] for k in cls if k in d})
-                self.pr_msg(tabulate(newdics, headers='keys'))
-            else:
-                for node in ans:
-                    # misc devices cannot be tested
-                    if not self.is_bootable(node):
-                        continue
-                    # test dns
-                    try:
-                        addr = socket.gethostbyname(node['node'])
-                    except(socket.gaierror):
-                        self.pr_msg('{}: no network name'.format(node['node']))
-                        return
-
-                    # compare with those registered to inventory
-                    msg = (node['node'] +
-                            ': Network address {} {} inventory one {}')
-                    m = 'unmatches' if addr != node['ip'] else 'matches'
-                    print(msg.format(addr, m, node['ip']))
-
-                    if self.def_ipmi_addr(addr) != node['ipmiaddr']:
-                        self.pr_msg('{}: ipmi addr {} differs from the default one {}'.format(
-                            self.def_ipmi_addr(addr), node['ipmiaddr']))
-
-                    # test ipmi
-                    msg = node['node'] + ': IPMI {} {}'
-                    if is_reachable(node['ipmiaddr']):
-                        print(msg.format(node['ipmiaddr'], 'reachable'))
-                    else:
-                        print(msg.format(node['ipmiaddr'], 'unreachable'))
-
-                    # test loader
-                    cmd = 'ls {}'.format(self.grubpath)
-                    msg = node['node'] + ': loader {} {} in ' + str(self.grubpath)
-                    try:
-                        res = subprocess.check_output(split(cmd))
-                    except(subprocess.CalledProcessError) as e:
-                        self.pr_msg(TmMsg.fail(node['node'], cmd))
-                        return
-                    files = []
-                    for f in res.decode().split('\n')[0:-1]:
-                        files.append(f)
-                    print(msg.format(node['mac'],
-                        'found' if node['mac'] in files else 'not found'))
-
-                    # test /etc/dnsmasq.conf
-                    cmd = ("cat /etc/dnsmasq.conf | grep ^dhcp-host= "
-                           "| cut -d' ' -f1 | cut -d'=' -f2")
-                    try:
-                        res = subprocess.getoutput(cmd)
-                    except(subprocess.CalledProcessError):
-                        self.pr_msg(TmMsg.fail(node['node'], cmd))
-                    for line in res.split('\n'):
-                        mac, ip, name = line.split(',')
-                        if node['node'] == name:
-                            if node['mac'] == mac and node['ip'] == ip:
-                                print('{}: MAC and IP address found in '
-                                      '/etc/dnsmasq.conf'.format(node['node']))
-                                break
-                            m = '{}: inventory {} registered {}'
-                            if node['mac'] != mac:
-                                print(m.format(name, node['mac'], mac))
-                            if node['ip'] != ip:
-                                print(m.format(name, node['ip'], ip))
-                            break
-                    else:
-                        self.pr_msg('{}: not in /etc/dnsmasq.conf'.format(
-                            node['node']))
+            ks = [i for s in [list(d.keys()) for d in dics] for i in s]
+            reorders = ['node', 'mac', 'ip', 'ipmiaddr', 'ipmipass',
+                    'chassis', 'cpu', 'ram', 'nic', 'disk',
+                    'user', 'expire', 'email', 'owner', 'note']
+            cls = [i for i in reorders if i in list(set(ks))]
+            for a in ('addrs', 'devices', 'reservations'):
+                if not getattr(args, a):
+                    cls = [c for c in cls if c not in getattr(self, a)]
+            newdics = []
+            for d in dics:
+                newdics.append({k: d[k] for k in cls if k in d})
+            self.pr_msg(tabulate(newdics, headers='keys'))
 
     def power(self, argv):
         parser = ArgumentParser(description="tm-power - power management",
