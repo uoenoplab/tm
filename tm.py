@@ -31,8 +31,6 @@ from argparse import ArgumentParser
 import sys
 import os
 import platform
-import pyipmi
-import pyipmi.interfaces
 import socket
 import paramiko
 import json
@@ -444,35 +442,13 @@ class Tm(object):
         if not self.is_reachable(addr):
             self.pr_msg('{}: IPMI address unreachable'.format(args.node))
             return
-        interface = pyipmi.interfaces.create_interface('ipmitool',
-                interface_type='lanplus')
-        ipmi = pyipmi.create_connection(interface)
-        ipmi.target = pyipmi.Target(0x0)
-        ipmi.session.set_session_type_rmcp(addr)
-        ipmi.session.establish()
-        r = None
 
         userpass = self.get_ipmi_cred(args.node)
-        ipmi.session.set_auth_type_user(userpass[0], userpass[1])
-        try:
-            if args.command == 'status':
-                r = ipmi.get_chassis_status()
-                self.pr_msg('poweron' if r.__dict__['power_on'] else 'poweroff')
-            else:
-                d = {k: v for v, k in
-                    enumerate(['poweroff', 'poweron', 'restart', 'reset'])}
-                if not ipmi.chassis_control(d[args.command]):
-                    self.pr_msg('{}: {} success'.format(
-                        args.node, args.command))
-        except(pyipmi.errors.CompletionCodeError):
-            if args.command == 'restart' or args.command == 'reset':
-                self.pr_msg('{}: cannot restart, power might be off'.format(
-                        args.node))
-            else:
-                print('CompletionCodeError')
-        except(RuntimeError):
-            print('Runtime error')
-        ipmi.session.close()
+        d = {'status': 'status', 'poweroff': 'off', 'poweron': 'on', 'restart':
+                'cycle', 'reset': 'reset'}
+        cmd = '{} -I lanplus -C 3 -H {} -U {} -P {} chassis power {}'.format(
+                'ipmitool', addr, userpass[0], userpass[1], d[args.command])
+        subprocess.call(split(cmd))
 
     def console(self, argv):
         parser = ArgumentParser(description="tm-console - access console.",
@@ -488,7 +464,7 @@ class Tm(object):
             return
 
         userpass = self.get_ipmi_cred(args.node)
-        cmd = 'ipmitool -I lanplus -H {} -U {} -P {} sol activate'.format(
+        cmd = 'ipmitool -I lanplus -C 3 -H {} -U {} -P {} sol activate'.format(
                 addrs[1], userpass[0], userpass[1])
         subprocess.call(split(cmd))
         print('\n')
