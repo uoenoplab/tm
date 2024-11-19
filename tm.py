@@ -431,43 +431,15 @@ class Tm(object):
                 help='{status|poweron|poweroff|restart|reset}')
         parser.add_argument('node', type=str, help=namehelp)
         args = parser.parse_args(argv[2:])
-
-        if args.command != 'status':
-            if not self.owner_or_root(args.node, needuser=False):
-                return
-        addr = self.get_addrs(args.node)[1]
-        if not addr:
-            self.pr_msg(TmMsg.not_in_inventory(args.node))
-            return
-        if not self.is_reachable(addr):
-            self.pr_msg('{}: IPMI address unreachable'.format(args.node))
-            return
-
-        userpass = self.get_ipmi_cred(args.node)
-        d = {'status': 'status', 'poweroff': 'off', 'poweron': 'on', 'restart':
-                'cycle', 'reset': 'reset'}
-        cmd = '{} -I lanplus -C 3 -H {} -U {} -P {} chassis power {}'.format(
-                'ipmitool', addr, userpass[0], userpass[1], d[args.command])
-        subprocess.call(split(cmd))
+        r = self.do_ipmi(args.node, args.command, args.command == 'status')
+        self.pr_msg(r)
 
     def console(self, argv):
         parser = ArgumentParser(description="tm-console - access console.",
                     usage='tm console <node>')
         parser.add_argument('node', type=str, help=namehelp)
         args = parser.parse_args(argv[2:])
-
-        if not self.owner_or_root(args.node, needuser=False):
-            return
-        addrs = self.get_addrs(args.node)
-        if None in addrs:
-            self.pr_msg(TmMsg.invalid_node(args.node))
-            return
-
-        userpass = self.get_ipmi_cred(args.node)
-        cmd = 'ipmitool -I lanplus -C 3 -H {} -U {} -P {} sol activate'.format(
-                addrs[1], userpass[0], userpass[1])
-        subprocess.call(split(cmd))
-        print('\n')
+        self.do_ipmi(args.node, 'console', False)
 
     def user(self, argv):
         parser = ArgumentParser(description="tm-user - user management",
@@ -778,6 +750,31 @@ class Tm(object):
     def get_ipmi_cred(self, node):
         r = self.db.get(Query().node == node)
         return r['ipmipass'].split(',')
+
+    def do_ipmi(self, node, command, noowner):
+        if not noowner and not self.owner_or_root(node, needuser=False):
+            self.pr_msg('Invalid user')
+            return
+        addr = self.get_addrs(node)[1]
+        if not addr:
+            self.pr_msg(TmMsg.not_in_inventory(node))
+            return
+        if not self.is_reachable(addr):
+            self.pr_msg('{}: IPMI address unreachable'.format(node))
+            return
+        userpass = self.get_ipmi_cred(node)
+        cmd = 'ipmitool -I lanplus -C 3 -H {} -U {} -P {} '.format(
+                addr, userpass[0], userpass[1])
+        console = command == 'console'
+        if console:
+            subcmd = 'sol activate'
+        else:
+            d = {'status': 'status', 'poweroff': 'off', 'poweron': 'on',
+                    'restart': 'cycle', 'reset': 'reset'}
+            subcmd = 'chassis power {}'.format(d[command])
+        cmd += subcmd
+        r = subprocess.run(split(cmd), capture_output=(not console))
+        return None if r.stdout is None else r.stdout.decode().strip()
 
     @staticmethod
     def get_filesystems(path):
