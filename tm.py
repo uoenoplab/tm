@@ -747,10 +747,6 @@ class Tm(object):
         res = self.db.all()
         return None if len(res) == 0 else res
 
-    def get_ipmi_cred(self, node):
-        r = self.db.get(Query().node == node)
-        return r['ipmipass'].split(',')
-
     def do_ipmi(self, node, command, noowner):
         if not noowner and not self.owner_or_root(node, needuser=False):
             self.pr_msg('Invalid user')
@@ -762,7 +758,7 @@ class Tm(object):
         if not self.is_reachable(addr):
             self.pr_msg('{}: IPMI address unreachable'.format(node))
             return
-        userpass = self.get_ipmi_cred(node)
+        userpass = self.db.get(Query().node == node)['ipmipass'].split(',')
         cmd = 'ipmitool -I lanplus -C 3 -H {} -U {} -P {} '.format(
                 addr, userpass[0], userpass[1])
         console = command == 'console'
