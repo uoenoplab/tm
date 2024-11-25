@@ -528,24 +528,25 @@ class Tm(object):
         dst = 'dst'
         fslst = []
         fp = Path(self.filesystems)
+        fpname = 'name in {}'.format(fp/u)
         for cmd in ('clone', 'new', 'delete', 'archive', 'restore'):
             p = subparsers.add_parser(cmd,
                     usage='tm filesystem {}'.format(cmd))
             if cmd in ('new', 'clone', 'delete', 'archive', 'restore'):
                 if cmd == 'restore':
-                    h = 'archived filesystem path (.tar.gz)'
+                    h = 'absolute path of the filesystem tarball (.tar.gz)'
                 elif cmd == 'new':
                     h = 'image in {}: '.format(fp/'base')
                     fslst = [str(x.name) for x in (fp/'base').iterdir()
                             if re.search('.tar.gz$', str(x))]
                     h += ' '.join(fslst)
                 else:
-                    h = 'name in {}'.format(fp/u)
+                    h = fpname
                 p.add_argument(src, type=str, help=h)
                 p.usage += ' {}'.format(src)
 
             if cmd in ('new', 'clone', 'restore'):
-                p.add_argument(dst, type=str, help='name in {}'.format(fp/u))
+                p.add_argument(dst, type=str, help=fpname)
                 p.usage += ' {}'.format(dst)
 
             p.usage += ' {}'.format('[-h|--help]')
