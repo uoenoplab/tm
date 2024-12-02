@@ -58,8 +58,8 @@ GRUBDIR = 'grub'
 namehelp = 'hostname (e.g., n04)'
 dtfmt = '%d/%m/%y'
 MAXDAYS = 7
-KERNELVERSION = '5.15.0-25-generic'
-FSVERSION = 'jammy'
+KERNELVERSION = '6.8.0-49-generic'
+FSVERSION = 'noble'
 NETWORKNODE = 's01'
 
 class TmMsg(object):
@@ -603,6 +603,8 @@ class Tm(object):
             cmd = 'tar xpf {} -C {} --strip-components 1'.format(srcp, dstp)
         print(cmd)
         self.run(cmd)
+        if cmd != 'delete':
+            return
         cmd = 'chown {}:{} {}'.format(self.sudo_user, self.sudo_user, dstp)
         print(cmd)
         self.run(cmd)
