@@ -60,7 +60,7 @@ dtfmt = '%d/%m/%y'
 MAXDAYS = 7
 KERNELVERSION = '6.8.0-49-generic'
 FSVERSION = 'noble'
-NETWORKNODE = 's01'
+NETWORKNODE = ['s01', 's03']
 
 class TmMsg(object):
     def empty_db():
@@ -270,15 +270,16 @@ class Tm(object):
             parser.print_help()
             return
 
-        ans = self.get_db(node=NETWORKNODE)[0]
-        if not 'misc' in ans:
-            self.pr_msg('{} does not have network information'.format(NETWORKNODE))
-            return
-        for i in ans['misc']:
-            if args.node is not None:
-                if i['node'] != args.node:
-                    continue
-            print(i)
+        for nn in NETWORKNODE:
+            ans = self.get_db(node=nn)[0]
+            if not 'misc' in ans:
+                self.pr_msg('{} does not have network information'.format(nn))
+                continue
+            for i in ans['misc']:
+                if args.node is not None:
+                    if i['node'] != args.node:
+                        continue
+                print(i)
         return
 
     def inventory(self, argv):
@@ -845,6 +846,34 @@ class Tm(object):
               'node': cols[5].split(':')[0], 'ifname': cols[5].split(':')[1],
               'ipaddr': '192.168.11.'+cols[0].replace('Eth1/', '').replace('/',
                     '') + trail + '/24'
+                })
+        return l
+
+    @staticmethod
+    def cumulus_interfaces(name):
+        client = paramiko.client.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(name, username="cumulus", password="noplab20")
+        _, stdout, _ = client.exec_command('net show interface alias')
+        l = []
+        for i in stdout:
+            if not re.search('swp', i):
+                continue
+            i2 = i.split()
+            if len(i2) != 4:
+                continue
+            if re.search('-tbd', i2[3]):
+                continue
+            if re.match('swp31s', i2[1]):
+                off = 131 + int(i2[1][6])
+            elif re.match('swp32s', i2[1]):
+                off = 135 + int(i2[1][6])
+            else:
+                off = int(i2[1][3:])
+            l.append({
+                'interface': i2[1], 'status': i2[0], 'speed': 'N/A',
+                'node': i2[3].split(':')[0], 'ifname': i2[3].split(':')[1],
+                'ipaddr': '192.168.11.{}/24'.format(off)
                 })
         return l
 
