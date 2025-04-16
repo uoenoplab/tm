@@ -816,7 +816,30 @@ class Tm(object):
             return None
 
     @staticmethod
+    def get_port_offset(l, desc_c, ifname_c, ifo, breakd, majoroff, minoroff,
+                        status_c, speed_c, start):
+        desc = l[desc_c]
+        port = l[ifname_c]
+        if not ':' in desc:
+            return None
+        elif desc[0] != 'n':
+            return None
+        s = port[ifo:] # 5 for mlnx 3 for cumulus
+        m = re.search(breakd, s) # breakout
+        absmajor = int(s) if m is None else int(s[:m.start()])
+        absminor = 0 if m is None else int(s[m.start()+1:])
+        off = (absmajor - majoroff) * 4 + (absminor - minoroff) + start
+        speed = l[speed_c] if speed_c else 'N/A'
+        l2 = {
+              'interface': port, 'status': l[status_c], 'speed': speed,
+              'node': desc.split(':')[0], 'ifname': desc.split(':')[1],
+              'ipaddr': '192.168.11.{}/24'.format(off)
+             }
+        return l2
+
+    @staticmethod
     def mlnx_interfaces(name):
+        # Eth1/1-16, breakout /1-4 We use 132-195 (64 port space)
         client = paramiko.client.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         client.connect(name, username="admin", password="admin")
@@ -837,44 +860,31 @@ class Tm(object):
             i = sub('\s+', ' ', i)
             i = sub('\(.*?\)', '', i)
             i = sub('-', '', i)
-            cols = re.split(' ', i)
-            if not search(':', cols[5]):
+            i2 = re.split(' ', i)
+            res = Tm.get_port_offset(i2, 5, 0, 5, '/', 1, 1, 1, 3, 132)
+            if res is None:
                 continue
-            trail = '0' if cols[0].count('/') == 1 else ''
-            l.append({
-              'interface': cols[0], 'status': cols[1], 'speed': cols[3],
-              'node': cols[5].split(':')[0], 'ifname': cols[5].split(':')[1],
-              'ipaddr': '192.168.11.'+cols[0].replace('Eth1/', '').replace('/',
-                    '') + trail + '/24'
-                })
+            l.append(res)
         return l
 
     @staticmethod
     def cumulus_interfaces(name):
+        # swp1-32, breakout s0-3 We use 4-131 (128 port space)
         client = paramiko.client.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         client.connect(name, username="cumulus", password="noplab20")
         _, stdout, _ = client.exec_command('net show interface alias')
         l = []
         for i in stdout:
-            if not re.search('swp', i):
+            if not re.search('swp[0-8]', i):
                 continue
             i2 = i.split()
             if len(i2) != 4:
                 continue
-            if re.search('-tbd', i2[3]):
+            res = Tm.get_port_offset(i2, 3, 1, 3, 's', 1, 0, 0, None, 4)
+            if res is None:
                 continue
-            if re.match('swp31s', i2[1]):
-                off = 131 + int(i2[1][6])
-            elif re.match('swp32s', i2[1]):
-                off = 135 + int(i2[1][6])
-            else:
-                off = int(i2[1][3:])
-            l.append({
-                'interface': i2[1], 'status': i2[0], 'speed': 'N/A',
-                'node': i2[3].split(':')[0], 'ifname': i2[3].split(':')[1],
-                'ipaddr': '192.168.11.{}/24'.format(off)
-                })
+            l.append(res)
         return l
 
 if __name__ == '__main__':
