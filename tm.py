@@ -58,7 +58,7 @@ GRUBDIR = 'grub'
 namehelp = 'hostname (e.g., n04)'
 dtfmt = '%d/%m/%y'
 MAXDAYS = 7
-KERNELVERSION = '6.8.0-49-generic'
+KERNELVERSION = '6.8.0-85-generic'
 FSVERSION = 'noble'
 NETWORKNODE = ['s01', 's03']
 
