@@ -816,7 +816,7 @@ class Tm(object):
             return None
 
     @staticmethod
-    def get_port_offset(l, desc_c, ifname_c, ifo, breakd, majoroff, minoroff,
+    def get_port_offset(l, desc_c, ifname_c, ifo, breakd, minorbase,
                         status_c, speed_c, start):
         desc = l[desc_c]
         port = l[ifname_c]
@@ -828,7 +828,7 @@ class Tm(object):
         m = re.search(breakd, s) # breakout
         absmajor = int(s) if m is None else int(s[:m.start()])
         absminor = 0 if m is None else int(s[m.start()+1:])
-        off = (absmajor - majoroff) * 4 + (absminor - minoroff) + start
+        off = (absmajor - 1) * 4 + (absminor - minorbase) + start
         speed = l[speed_c] if speed_c else 'N/A'
         l2 = {
               'interface': port, 'status': l[status_c], 'speed': speed,
@@ -839,7 +839,7 @@ class Tm(object):
 
     @staticmethod
     def mlnx_interfaces(name):
-        # Eth1/1-16, breakout /1-4 We use 132-195 (64 port space)
+        # Eth1/1-16, breakout /1-4 We use 129-192 (64 port space)
         client = paramiko.client.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         client.connect(name, username="admin", password="admin")
@@ -861,7 +861,7 @@ class Tm(object):
             i = sub('\(.*?\)', '', i)
             i = sub('-', '', i)
             i2 = re.split(' ', i)
-            res = Tm.get_port_offset(i2, 5, 0, 5, '/', 1, 1, 1, 3, 132)
+            res = Tm.get_port_offset(i2, 5, 0, 5, '/', 1, 1, 3, 129)
             if res is None:
                 continue
             l.append(res)
@@ -869,7 +869,7 @@ class Tm(object):
 
     @staticmethod
     def cumulus_interfaces(name):
-        # swp1-32, breakout s0-3 We use 4-131 (128 port space)
+        # swp1-32, breakout s0-3 We use 1-128 (128 port space)
         client = paramiko.client.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         client.connect(name, username="cumulus", password="noplab20")
@@ -881,7 +881,7 @@ class Tm(object):
             i2 = i.split()
             if len(i2) != 4:
                 continue
-            res = Tm.get_port_offset(i2, 3, 1, 3, 's', 1, 0, 0, None, 4)
+            res = Tm.get_port_offset(i2, 3, 1, 3, 's', 0, 0, None, 1)
             if res is None:
                 continue
             l.append(res)
