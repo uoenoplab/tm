@@ -52,7 +52,7 @@ DBFILE = '/usr/local/tm/tmdb.json'
 TFTPBOOT = '/var/lib/tftpboot'
 DHCPBOOT = str(Path(TFTPBOOT)/'machines')
 FILESYSTEMS = '/opt/nfs/filesystems'
-GRUB_LINUX_AA64 = 'grubnetaa64.efi.signed'
+GRUB_LINUX_AA64 = 'grubaa64.efi'
 GRUB_LINUX_X64 = 'grubnetx64.efi.signed'
 GRUBDIR = 'grub'
 namehelp = 'hostname (e.g., n04)'
@@ -783,7 +783,7 @@ class Tm(object):
     # XXX
     def get_aa64(self, node):
         r = self.db.get(Query().node == node)
-        return True if re.search('Neoverse', r['cpu']) else False
+        return True if re.search('Altra', r['cpu']) else False
 
     def pr_msg(self, msg):
         self.output = msg
